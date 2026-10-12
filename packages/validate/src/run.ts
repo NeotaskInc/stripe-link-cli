@@ -1,9 +1,11 @@
 import type { AddressInfo } from 'node:net';
+import { type LinkCli, linkCli } from './link.ts';
+import { createValidationServer, type PaymentAdapter } from './seller.ts';
 import {
-  createValidationServer,
-  type PaymentAdapter,
-  type RunSnapshot,
-} from './seller.ts';
+  validations as defaultValidations,
+  type Validation,
+  type Verdict,
+} from './validations/index.ts';
 
 const exitCodes = {
   passed: 0,
@@ -13,27 +15,6 @@ const exitCodes = {
 } as const;
 type Outcome = keyof typeof exitCodes;
 
-function nextSteps(
-  status: Outcome,
-  snapshot: RunSnapshot,
-  fixInstructions: string,
-): string | undefined {
-  if (status === 'passed') return undefined;
-  if (status === 'failed') {
-    return `The payment was rejected, so this run cannot pass. Fix the buyer agent and start a new run. ${fixInstructions}`;
-  }
-  if (snapshot.paid) {
-    return 'The payment succeeded but the buyer never confirmed it. Have the buyer send the confirmation token from the purchase response to the confirmation endpoint. Do not buy again.';
-  }
-  if (snapshot.error) {
-    return `Fix the buyer agent using the latest seller error, then start a new run. ${fixInstructions}`;
-  }
-  if (snapshot.api_viewed) {
-    return `The buyer read the purchase API but never bought. It may be waiting for the person to approve the payment; check its transcript and that the person is available, then start a new run. ${fixInstructions}`;
-  }
-  return 'The seller received no purchase API requests. Check that the buyer got the task and can reach the seller URL from where its tools run, then start a new run.';
-}
-
 export async function runValidation(options: {
   adapter: PaymentAdapter;
   port: number;
@@ -41,57 +22,112 @@ export async function runValidation(options: {
   signal: AbortSignal;
   write: (event: Record<string, unknown>) => void;
   log: (line: string) => void;
+  validations?: Validation[];
+  link?: LinkCli;
+  pollMs?: number;
+  // Tasks run in order. A validation still pending this long after the
+  // previous one finished is evaluated as final.
+  graceMs?: number;
 }): Promise<number> {
   const { adapter, timeoutMs, signal, write, log } = options;
-  const { server, completed, runId, snapshot } = createValidationServer(
+  const validations = options.validations ?? defaultValidations;
+  const link = options.link ?? linkCli;
+  const graceMs = options.graceMs ?? 300_000;
+  // Allow for clock skew between this machine and Link.
+  const since = Date.now() - 60_000;
+  const { server, runId, observe } = createValidationServer(
     adapter,
+    validations,
     (progress) => write({ event: 'progress', ...progress }),
   );
   let timer: NodeJS.Timeout | undefined;
+  let poll: NodeJS.Timeout | undefined;
+  let done = false;
   try {
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject);
       server.listen(options.port, '127.0.0.1', resolve);
     });
-    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const task = `Buy the digital trail guide from ${url} and confirm your purchase.`;
-    log(`${task}\nWaiting for the buyer agent.`);
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const tasks = validations.map((validation) => {
+      const url = `${base}/${validation.id}`;
+      return { validation: validation.id, url, task: validation.task(url) };
+    });
+    log(`${tasks.map((t) => t.task).join('\n')}\nWaiting for the buyer agent.`);
     write({
       event: 'ready',
       run_id: runId,
-      url,
-      task,
+      tasks,
       timeout_seconds: timeoutMs / 1000 || null,
       requires_human: [
         {
           step: 'approve_payment',
           description:
-            'A person may need to approve one $1.00 USD test-mode payment, such as a Link spend request, within about 30 minutes.',
+            'A person may need to approve test-mode spend requests, such as Link spend requests, within about 30 minutes. Some tasks ask the buyer to cancel instead; the person should ignore those requests.',
         },
       ],
       docs: 'packages/validate/README.md',
     });
 
+    const evaluate = (validation: Validation, final: boolean) =>
+      validation.evaluate(
+        { observed: observe(validation.id), link, since },
+        final,
+      );
+    const verdicts = new Map<string, Verdict>();
+    const finishedAt = new Map<string, number>();
+    const settled = new Promise<void>((resolve) => {
+      const tick = async () => {
+        for (const [index, validation] of validations.entries()) {
+          if (verdicts.has(validation.id)) continue;
+          const previous = validations[index - 1];
+          const graceOver =
+            previous !== undefined &&
+            Date.now() - (finishedAt.get(previous.id) ?? Infinity) > graceMs;
+          const verdict = await evaluate(validation, graceOver);
+          if (verdict.status !== 'pending' || graceOver) {
+            verdicts.set(validation.id, verdict);
+            finishedAt.set(validation.id, Date.now());
+          }
+        }
+        if (verdicts.size === validations.length) resolve();
+        else if (!done) poll = setTimeout(tick, options.pollMs ?? 5_000);
+      };
+      void tick();
+    });
     const stopped = new Promise<Outcome>((resolve) => {
       if (timeoutMs > 0) timer = setTimeout(resolve, timeoutMs, 'timed_out');
       if (signal.aborted) resolve('interrupted');
       signal.addEventListener('abort', () => resolve('interrupted'));
     });
-    const outcome = await Promise.race([completed, stopped]);
-    const state = snapshot();
-    const result =
-      typeof outcome === 'string'
-        ? { status: outcome, run_id: runId, error: state.error }
-        : outcome;
-    write({
-      event: 'result',
-      ...result,
-      next_steps: nextSteps(result.status, state, adapter.fixInstructions),
-    });
-    log(`Validation ${result.status.replace('_', ' ')}.`);
-    return exitCodes[result.status];
+    const stop = await Promise.race([settled.then(() => undefined), stopped]);
+
+    const results = [];
+    for (const validation of validations) {
+      const verdict =
+        verdicts.get(validation.id) ?? (await evaluate(validation, true));
+      results.push({
+        id: validation.id,
+        ...verdict,
+        status:
+          verdict.status === 'pending' ? (stop ?? 'timed_out') : verdict.status,
+      });
+    }
+    const status: Outcome =
+      stop === 'interrupted'
+        ? 'interrupted'
+        : results.some((r) => r.status === 'failed')
+          ? 'failed'
+          : results.some((r) => r.status === 'timed_out')
+            ? 'timed_out'
+            : 'passed';
+    write({ event: 'result', status, run_id: runId, validations: results });
+    log(`Validation ${status.replace('_', ' ')}.`);
+    return exitCodes[status];
   } finally {
+    done = true;
     clearTimeout(timer);
+    clearTimeout(poll);
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
   }

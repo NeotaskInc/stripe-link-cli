@@ -47,7 +47,8 @@ node packages/cli/dist/cli.js <command>
 
 ### Developer payment validation
 
-- `pnpm validate` starts a local test seller (`packages/validate`) that checks whether a buyer agent can pay with a test-mode SPT. It is repo tooling, not part of the published CLI. Keep `packages/validate/README.md`, the guide for coding agents, aligned with its behavior.
+- `pnpm validate` starts a local test seller (`packages/validate`) and runs buyer-agent validations, reading Link data through `link-cli`. It is repo tooling, not part of the published CLI. Keep `packages/validate/README.md`, the guide for coding agents, aligned with its behavior.
+- To add a validation, add a module in `packages/validate/src/validations/` and list it in `validations/index.ts`. The seller and runner are generic; keep validation-specific details in the module, and don't enumerate validations in docs or comments.
 - Claimable sandbox keys (`rkcs_`) are rejected because they can't accept SPTs.
 - Never echo seller keys or SPTs in output or errors.
 

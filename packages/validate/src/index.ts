@@ -5,8 +5,8 @@ import { readStripeTestKey } from './stripe-config.ts';
 
 const help = `Usage: pnpm validate [--timeout <seconds>] [--port <port>]
 
-Starts a local test seller. Give the printed task to a buyer agent. The run
-passes when the agent pays $1.00 with a test-mode SPT and confirms the purchase.
+Starts a local test seller and prints a task for each validation. Give each task
+to the buyer agent, one at a time in order. Reads Link data through link-cli.
 See packages/validate/README.md.
 
 --timeout defaults to 1800 seconds; 0 waits indefinitely.

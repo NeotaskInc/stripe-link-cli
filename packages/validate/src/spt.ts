@@ -1,16 +1,9 @@
 import { z } from 'zod';
 import type { PaymentAdapter } from './seller.ts';
 
-const amount = 100;
 const currency = 'usd';
+export const sptNetworkId = 'profile_test_seller';
 const purchaseBody = z.object({ spt: z.string().startsWith('spt_').max(512) });
-const paymentIntent = z.object({
-  id: z.string().startsWith('pi_'),
-  status: z.literal('succeeded'),
-  livemode: z.literal(false),
-  amount: z.literal(amount),
-  currency: z.literal(currency),
-});
 
 export function createSptAdapter(
   secretKey: string,
@@ -23,21 +16,11 @@ export function createSptAdapter(
   }
 
   return {
-    fixInstructions:
-      'Get a fresh test SPT for the network ID and total in the purchase API, wait for approval and the token itself, submit it as documented, and keep the confirmation token.',
-    documentation: {
-      amount,
-      currency,
-      test_mode: true,
-      network_id: 'profile_test_seller',
-      purchase: {
-        method: 'POST',
-        path: '/purchase',
-        content_type: 'application/json',
-        body: { spt: '<test shared payment token for this seller and total>' },
-      },
+    documentation: { currency, test_mode: true, network_id: sptNetworkId },
+    credential: {
+      spt: '<test shared payment token for this seller and price>',
     },
-    async purchase(body, runId) {
+    async purchase(body, { amount, runId, idempotencyKey }) {
       const parsed = purchaseBody.safeParse(body);
       if (!parsed.success) {
         return { status: 400, error: 'Submit an SPT in the spt field.' };
@@ -53,8 +36,8 @@ export function createSptAdapter(
             Authorization: `Bearer ${secretKey}`,
             'Content-Type': 'application/x-www-form-urlencoded',
             'Stripe-Version': '2026-07-29.preview',
-            // One fixed purchase per run, even if the caller retries.
-            'Idempotency-Key': `link_validate_${runId}`,
+            // One fixed purchase per validation run, even if the caller retries.
+            'Idempotency-Key': idempotencyKey,
           },
           body: new URLSearchParams({
             amount: String(amount),
@@ -67,7 +50,15 @@ export function createSptAdapter(
           }),
         },
       );
-      const verified = paymentIntent.safeParse(await response.json());
+      const verified = z
+        .object({
+          id: z.string().startsWith('pi_'),
+          status: z.literal('succeeded'),
+          livemode: z.literal(false),
+          amount: z.literal(amount),
+          currency: z.literal(currency),
+        })
+        .safeParse(await response.json());
       if (!verified.success) {
         return {
           status: 422,
