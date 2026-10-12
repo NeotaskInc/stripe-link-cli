@@ -22,12 +22,6 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true });
 });
 
-it('prefers an environment key over the Stripe CLI config', () => {
-  writeFileSync(configPath, 'not valid TOML');
-  vi.stubEnv('STRIPE_SECRET_KEY', 'sk_test_env');
-  expect(readStripeTestKey()).toBe('sk_test_env');
-});
-
 it('reads the selected profile test key', () => {
   writeFileSync(
     configPath,

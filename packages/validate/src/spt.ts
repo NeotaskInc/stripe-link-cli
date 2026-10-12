@@ -16,9 +16,13 @@ export function createSptAdapter(
   }
 
   return {
-    documentation: { currency, test_mode: true, network_id: sptNetworkId },
-    credential: {
-      spt: '<test shared payment token for this seller and price>',
+    documentation: {
+      currency,
+      test_mode: true,
+      network_id: sptNetworkId,
+      credential: {
+        spt: '<test shared payment token for this seller and price>',
+      },
     },
     async purchase(body, { amount, runId, idempotencyKey }) {
       const parsed = purchaseBody.safeParse(body);

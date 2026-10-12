@@ -3,7 +3,6 @@ import { sptNetworkId } from '../spt.ts';
 import type { Validation } from './index.ts';
 
 const product = { name: 'Field guide', amount: 200, ships: false };
-
 export const sptCancel: Validation = {
   id: 'spt-cancel',
   // The price identifies this validation's spend request in Link.
@@ -15,9 +14,8 @@ export const sptCancel: Validation = {
     if (observed.purchase_attempted) {
       return {
         status: 'failed',
-        error: 'The buyer tried to pay instead of canceling.',
-        next_steps:
-          'Have the buyer cancel the spend request after surfacing the approval URL, without paying.',
+        error:
+          'A payment was submitted instead of canceling the spend request.',
       };
     }
     const found = await findSpendRequest(link, {
@@ -29,7 +27,7 @@ export const sptCancel: Validation = {
       return {
         status: 'unverified',
         next_steps:
-          'link-cli could not list spend requests. Log in with `link-cli auth login` so the validator can check the cancel.',
+          'link-cli could not list spend requests, so the cancellation could not be checked. This could be caused by link-cli not being logged in.',
       };
     }
     if (found.request?.status === 'canceled') return { status: 'passed' };
@@ -37,14 +35,12 @@ export const sptCancel: Validation = {
     return found.request
       ? {
           status: 'pending',
-          error: `The spend request is ${found.request.status}, not canceled.`,
-          next_steps:
-            'Have the buyer cancel the spend request after surfacing the approval URL.',
+          error: `The spend request was ${found.request.status}, not canceled.`,
         }
       : {
           status: 'unverified',
           next_steps:
-            'No matching spend request was found for this machine’s Link login. Run this task after the previous one, and make sure the buyer uses the same Link login as link-cli.',
+            "No spend request for this task was found. This could be caused by the request not being created, or by a different Link login than link-cli's on this machine.",
         };
   },
 };

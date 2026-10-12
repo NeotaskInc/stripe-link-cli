@@ -39,7 +39,7 @@ function run(timeoutMs: number, link: LinkCli) {
   });
   const results = () =>
     Object.fromEntries(
-      (events.at(-1)?.validations as Result[]).map((r) => [r.id, r]),
+      ((events.at(-1)?.validations ?? []) as Result[]).map((r) => [r.id, r]),
     );
   return { events, readyEvent, exit, results };
 }
@@ -77,7 +77,11 @@ const canceled = link([
 
 it('passes when the buyer ships to the default address and cancels', async () => {
   const validation = run(0, canceled);
-  await buy(await validation.readyEvent);
+  // Case and whitespace differences from the Link address record still match.
+  await buy(await validation.readyEvent, {
+    line_1: ' 123 MAIN ST ',
+    country_code: 'us',
+  });
   expect(await validation.exit).toBe(0);
   expect(validation.results()).toMatchObject({
     'spt-purchase': { status: 'passed', shipping: 'passed' },

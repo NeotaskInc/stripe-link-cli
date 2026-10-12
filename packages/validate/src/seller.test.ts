@@ -135,6 +135,9 @@ it('requires shipping where the product ships and refuses unsellable products', 
   ).toBe(400);
   expect((await post(`${run.url}/spt-cancel/purchase`, {})).status).toBe(409);
   expect(run.observe('spt-cancel').purchase_attempted).toBe(true);
+  expect(
+    await fetch(`${run.url}/spt-cancel/api`).then((r) => r.json()),
+  ).not.toHaveProperty('confirmation');
   expect(run.progress).toContainEqual(
     expect.objectContaining({
       validation: 'spt-cancel',

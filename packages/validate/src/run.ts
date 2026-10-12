@@ -53,7 +53,7 @@ export async function runValidation(options: {
       const url = `${base}/${validation.id}`;
       return { validation: validation.id, url, task: validation.task(url) };
     });
-    log(`${tasks.map((t) => t.task).join('\n')}\nWaiting for the buyer agent.`);
+    log(`${tasks.map((t) => t.task).join('\n')}\nWaiting for the agent.`);
     write({
       event: 'ready',
       run_id: runId,
@@ -63,7 +63,7 @@ export async function runValidation(options: {
         {
           step: 'approve_payment',
           description:
-            'A person may need to approve test-mode spend requests, such as Link spend requests, within about 30 minutes. Some tasks ask the buyer to cancel instead; the person should ignore those requests.',
+            'A person may need to approve a test-mode spend request within about 30 minutes. Ignore approval requests for tasks that ask to cancel.',
         },
       ],
       docs: 'packages/validate/README.md',
@@ -74,23 +74,21 @@ export async function runValidation(options: {
         { observed: observe(validation.id), link, since },
         final,
       );
-    const verdicts = new Map<string, Verdict>();
-    const finishedAt = new Map<string, number>();
+    // One map of settled verdicts, keyed by validation id, each with the time
+    // it settled (used to grace the next validation in order).
+    const finished = new Map<string, { verdict: Verdict; at: number }>();
     const settled = new Promise<void>((resolve) => {
       const tick = async () => {
         for (const [index, validation] of validations.entries()) {
-          if (verdicts.has(validation.id)) continue;
-          const previous = validations[index - 1];
-          const graceOver =
-            previous !== undefined &&
-            Date.now() - (finishedAt.get(previous.id) ?? Infinity) > graceMs;
+          if (finished.has(validation.id)) continue;
+          const prev = finished.get(validations[index - 1]?.id ?? '');
+          const graceOver = !!prev && Date.now() - prev.at > graceMs;
           const verdict = await evaluate(validation, graceOver);
           if (verdict.status !== 'pending' || graceOver) {
-            verdicts.set(validation.id, verdict);
-            finishedAt.set(validation.id, Date.now());
+            finished.set(validation.id, { verdict, at: Date.now() });
           }
         }
-        if (verdicts.size === validations.length) resolve();
+        if (finished.size === validations.length) resolve();
         else if (!done) poll = setTimeout(tick, options.pollMs ?? 5_000);
       };
       void tick();
@@ -105,7 +103,8 @@ export async function runValidation(options: {
     const results = [];
     for (const validation of validations) {
       const verdict =
-        verdicts.get(validation.id) ?? (await evaluate(validation, true));
+        finished.get(validation.id)?.verdict ??
+        (await evaluate(validation, true));
       results.push({
         id: validation.id,
         ...verdict,

@@ -2,20 +2,17 @@ import { defaultShippingAddress, sameAddress } from '../link.ts';
 import type { Observed } from '../seller.ts';
 import type { Validation } from './index.ts';
 
-const fix =
-  'Get a fresh test SPT for the network ID and price in the purchase API, wait for approval and the token itself, submit it as documented, and keep the confirmation token.';
-
 function nextSteps(observed: Observed) {
-  if (observed.paid) {
-    return 'The payment succeeded but the buyer never confirmed it. Have the buyer send the confirmation token from the purchase response to the confirmation endpoint. Do not buy again.';
+  if (observed.payment) {
+    return 'The payment succeeded but the purchase was never confirmed. This could be caused by the confirmation token not being sent to the confirmation endpoint.';
   }
   if (observed.error) {
-    return `Fix the buyer agent using the latest seller error, then start a new run. ${fix}`;
+    return `There was an error: ${observed.error}`;
   }
   if (observed.api_viewed) {
-    return `The buyer read the purchase API but never bought. It may be waiting for the person to approve the payment; check its transcript and that the person is available, then start a new run. ${fix}`;
+    return 'The API was viewed but the transaction was never completed. This could be caused by a spend request that was never approved or a timeout.';
   }
-  return 'The seller received no purchase API requests. Check that the buyer got the task and can reach the seller URL from where its tools run, then start a new run.';
+  return 'The seller received no requests. This could be caused by the task not reaching the agent or the seller URL being unreachable from where it runs.';
 }
 
 export const sptPurchase: Validation = {
@@ -29,7 +26,8 @@ export const sptPurchase: Validation = {
       return {
         status: 'failed',
         error: observed.terminal_error,
-        next_steps: `The payment was rejected, so this run cannot pass. Fix the buyer agent and start a new run. ${fix}`,
+        next_steps:
+          'The payment was rejected, so this run cannot pass. This could be caused by an SPT for a different network ID or amount.',
       };
     }
     if (!observed.confirmed) {
@@ -59,9 +57,7 @@ export const sptPurchase: Validation = {
       ...observed.payment,
       shipping: 'failed',
       error:
-        'The buyer shipped to an address that is not the default Link shipping address.',
-      next_steps:
-        'Have the buyer read the Link shipping addresses and use the default one unless told otherwise, then start a new run.',
+        'The order shipped to an address other than the default Link shipping address.',
     };
   },
 };

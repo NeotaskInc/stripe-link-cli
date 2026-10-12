@@ -6,9 +6,12 @@ import type { Address } from './link.ts';
 import type { Validation } from './validations/index.ts';
 
 export type PaymentAdapter = {
-  documentation: Record<string, unknown>;
-  // Purchase body fields for the payment credential.
-  credential: Record<string, string>;
+  // Metadata and purchase-body credential fields shown by GET /api. The
+  // `credential` fields go in the purchase request body; the rest sit
+  // alongside `product` in the response.
+  documentation: Record<string, unknown> & {
+    credential: Record<string, string>;
+  };
   // Return payment evidence only after verifying the completed test payment.
   // A terminal error means this validation can no longer pass.
   purchase(
@@ -36,7 +39,6 @@ export type Progress = {
 export type Observed = {
   api_viewed: boolean;
   purchase_attempted: boolean;
-  paid: boolean;
   confirmed: boolean;
   payment?: Record<string, string>;
   shipping_address?: Address;
@@ -46,17 +48,11 @@ export type Observed = {
   terminal_error?: string;
 };
 
-const addressField = z.string().max(200).optional();
+// A record of strings, bounded by the 8 KiB request limit below.
 const shippingBody = z.object({
-  shipping_address: z.object({
-    name: addressField,
-    line_1: z.string().min(1).max(200),
-    line_2: addressField,
-    locality: addressField,
-    administrative_area: addressField,
-    postal_code: addressField,
-    country_code: z.string().length(2),
-  }),
+  shipping_address: z
+    .record(z.string(), z.string().max(200))
+    .refine((address) => !!address.line_1, 'shipping_address requires line_1'),
 });
 const confirmationBody = z.object({ confirmation_token: z.string() });
 
@@ -87,7 +83,6 @@ export function createValidationServer(
         observed: {
           api_viewed: false,
           purchase_attempted: false,
-          paid: false,
           confirmed: false,
         } as Observed,
       },
@@ -137,8 +132,7 @@ export function createValidationServer(
       send(
         200,
         'text/html; charset=utf-8',
-        '<!doctype html><html lang="en"><meta charset="utf-8">' +
-          '<title>Trail Notes</title><h1>Trail Notes</h1>' +
+        `<!doctype html><html lang="en"><meta charset="utf-8"><title>Trail Notes</title><h1>Trail Notes</h1>` +
           `<p>${product.name}, $${(product.amount / 100).toFixed(2)} USD${product.ships ? ', shipped' : ''}.</p>` +
           `<p><a href="${base}/api">Purchase API documentation</a></p></html>`,
       );
@@ -147,26 +141,29 @@ export function createValidationServer(
     if (request.method === 'GET' && page === '/api') {
       observed.api_viewed = true;
       report({ validation: validation.id, step: 'api_viewed' });
+      const { credential, ...meta } = adapter.documentation;
       reply(200, {
         product,
-        ...adapter.documentation,
+        ...meta,
         purchase: {
           method: 'POST',
           path: `${base}/purchase`,
           content_type: 'application/json',
           body: {
-            ...adapter.credential,
+            ...credential,
             ...(product.ships && {
               shipping_address:
                 '<name, line_1, line_2, locality, administrative_area, postal_code, country_code>',
             }),
           },
         },
-        confirmation: {
-          method: 'POST',
-          path: `${base}/confirm`,
-          body: { confirmation_token: '<token returned by the purchase>' },
-        },
+        ...(validation.sellable && {
+          confirmation: {
+            method: 'POST',
+            path: `${base}/confirm`,
+            body: { confirmation_token: '<token returned by the purchase>' },
+          },
+        }),
       });
       return;
     }
@@ -194,10 +191,6 @@ export function createValidationServer(
     if (!validation.sellable) {
       observed.purchase_attempted = true;
       fail(409, `${product.name} is not for sale in this validation.`);
-      return;
-    }
-    if (request.headers['content-type']?.split(';')[0] !== 'application/json') {
-      fail(415, 'Send application/json.');
       return;
     }
 
@@ -234,7 +227,7 @@ export function createValidationServer(
       fail(400, `${product.name} ships. Include a shipping_address.`);
       return;
     }
-    if (observed.terminal_error || run.purchasing || observed.paid) {
+    if (observed.terminal_error || run.purchasing || observed.payment) {
       reply(409, {
         error:
           'This validation already has a purchase. If it failed, start a new validation run.',
@@ -242,7 +235,7 @@ export function createValidationServer(
       return;
     }
     if (shipping.success) {
-      observed.shipping_address = shipping.data.shipping_address;
+      observed.shipping_address = shipping.data.shipping_address as Address;
     }
     run.purchasing = true;
     observed.error = undefined;
@@ -262,7 +255,6 @@ export function createValidationServer(
         else fail(result.status, result.error);
         return;
       }
-      observed.paid = true;
       observed.payment = result.payment;
       run.confirmationToken = randomUUID();
       report({ validation: validation.id, step: 'payment_verified' });

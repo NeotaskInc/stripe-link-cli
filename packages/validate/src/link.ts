@@ -1,34 +1,21 @@
 import { execFile } from 'node:child_process';
 
-// Runs a Link CLI command and returns its JSON output, or undefined when the
-// CLI is unavailable, logged out, or fails. Output can contain personal data,
-// so it is never logged.
+// Runs a Link CLI command and returns its JSON output, or undefined when
+// link-cli is unavailable, logged out, or fails. Output can contain personal
+// data, so it is never logged.
 export type LinkCli = (args: string[]) => Promise<unknown>;
 
-function exec(command: string, args: string[]) {
-  return new Promise<{ code?: string; stdout?: string }>((resolve) => {
+export const linkCli: LinkCli = async (args) => {
+  const stdout = await new Promise<string | undefined>((resolve) => {
     execFile(
-      command,
-      args,
+      'link-cli',
+      [...args, '--format', 'json'],
       { timeout: 60_000, maxBuffer: 10 * 1024 * 1024 },
-      (error, stdout) =>
-        resolve(
-          error
-            ? { code: (error as NodeJS.ErrnoException).code?.toString() }
-            : { stdout },
-        ),
+      (error, stdout) => resolve(error ? undefined : stdout),
     );
   });
-}
-
-export const linkCli: LinkCli = async (args) => {
-  const argv = [...args, '--format', 'json'];
-  let result = await exec('link-cli', argv);
-  if (result.code === 'ENOENT') {
-    result = await exec('npx', ['-y', '@stripe/link-cli', ...argv]);
-  }
   try {
-    return result.stdout === undefined ? undefined : JSON.parse(result.stdout);
+    return stdout === undefined ? undefined : JSON.parse(stdout);
   } catch {
     return undefined;
   }
@@ -84,23 +71,23 @@ type SpendRequest = {
   status?: string;
 };
 
-// Finds the newest spend request the cancel scenario should have created.
-// `available: false` means link-cli could not list spend requests at all.
+// Finds a spend request matching the validation's network, amount, and time
+// window: a canceled match if any, else any match (for its status in an
+// error message). `available: false` means link-cli could not list requests.
 export async function findSpendRequest(
   cli: LinkCli,
   match: { networkId: string; amount: number; since: number },
 ): Promise<{ available: false } | { available: true; request?: SpendRequest }> {
   const requests = await cli(['spend-request', 'list', '--include-history']);
   if (!Array.isArray(requests)) return { available: false };
-  const request = (requests as SpendRequest[])
-    .filter(
-      (r) =>
-        r.network_id === match.networkId &&
-        r.amount === match.amount &&
-        Date.parse(r.created_at ?? '') >= match.since,
-    )
-    .sort(
-      (a, b) => Date.parse(b.created_at ?? '') - Date.parse(a.created_at ?? ''),
-    )[0];
-  return { available: true, request };
+  const matches = (requests as SpendRequest[]).filter(
+    (r) =>
+      r.network_id === match.networkId &&
+      r.amount === match.amount &&
+      Date.parse(r.created_at ?? '') >= match.since,
+  );
+  return {
+    available: true,
+    request: matches.find((r) => r.status === 'canceled') ?? matches[0],
+  };
 }
