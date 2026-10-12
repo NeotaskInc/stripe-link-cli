@@ -11,6 +11,9 @@ import {
   runInspect,
 } from '../inspect';
 
+const STRIPE_SPT_GUIDANCE =
+  'Use mpp pay with --context (at least 100 characters) and any required request body. It creates a spend request with credential_type: shared_payment_token and requests buyer approval.';
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -156,6 +159,20 @@ function stripeChallengeHeader(networkId: string): string {
   ].join(' ');
 }
 
+function tempoChallengeHeader(): string {
+  return [
+    'Payment id="ch_tempo",',
+    'realm="shop.example.com",',
+    'method="tempo",',
+    'intent="charge",',
+    `request="${encodeStripeRequest({
+      amount: '100',
+      currency: 'usd',
+      recipient: '0x1234',
+    })}"`,
+  ].join(' ');
+}
+
 describe('runInspect', () => {
   it('returns the origin url and omits empty optional fields', async () => {
     const fetchImpl = vi.fn(async () => notFound());
@@ -228,15 +245,18 @@ describe('runInspect', () => {
     expect(result.available_tools?.machine_payments).toEqual([
       {
         command: "link-cli mpp pay 'https://shop.example.com/api/thing'",
-        description: 'Fetch a thing',
+        description: `Fetch a thing ${STRIPE_SPT_GUIDANCE}`,
         url: 'https://shop.example.com/api/thing',
         method: 'stripe',
+        rail: 'stripe_spt',
+        credential_type: 'shared_payment_token',
       },
       {
         command: "tempo request 'https://shop.example.com/api/thing'",
         description: 'Fetch a thing',
         url: 'https://shop.example.com/api/thing',
         method: 'tempo',
+        rail: 'tempo',
       },
     ]);
   });
@@ -281,6 +301,7 @@ describe('runInspect', () => {
         description: 'Fetch a thing',
         url: 'https://shop.example.com/api/thing',
         method: 'tempo',
+        rail: 'tempo',
       },
     ]);
   });
@@ -292,6 +313,9 @@ describe('runInspect', () => {
         return jsonResponse(protocolsOnlySpec());
       }
       if (url === 'https://climate.stripe.dev/api/contribute') {
+        if (init?.method === 'GET') {
+          return new Response('Method not allowed', { status: 405 });
+        }
         expect(init?.method).toBe('POST');
         expect(init?.body).toBe(JSON.stringify({ amount: 1 }));
         return new Response('Payment required', {
@@ -318,8 +342,228 @@ describe('runInspect', () => {
         "link-cli mpp pay 'https://climate.stripe.dev/api/contribute' --method POST",
       url: 'https://climate.stripe.dev/api/contribute',
       method: 'stripe',
+      rail: 'stripe_spt',
+      credential_type: 'shared_payment_token',
     });
     expect(result.available_tools).not.toHaveProperty('browser_checkout');
+  });
+
+  it.each([
+    ['https://postalform.com', '/api/machine/mpp/orders'],
+    ['https://another.example', '/v2/invoices/checkout'],
+  ])(
+    'discovers SPT and Tempo on %s without probing x402 orders',
+    async (origin, path) => {
+      const fetchImpl = vi.fn(async (input: string | URL, init?: RequestInit) => {
+        const url = input.toString();
+        if (url === `${origin}/openapi.json`) {
+          return jsonResponse({
+            paths: {
+              '/api/x402/orders': {
+                post: { 'x-payment-info': { protocols: ['x402'] } },
+              },
+              '/known': {
+                get: { 'x-payment-info': { offers: [{ method: 'stripe' }] } },
+              },
+              '/unavailable': {
+                post: { 'x-payment-info': { protocols: ['mpp'] } },
+              },
+              [path]: {
+                get: { 'x-payment-info': { protocols: ['mpp'] } },
+                post: {
+                  'x-payment-info': { protocols: ['mpp'] },
+                  requestBody: {
+                    content: {
+                      'application/json': {
+                        schema: { $ref: '#/components/schemas/Order' },
+                      },
+                    },
+                  },
+                },
+              },
+              '/orders/{id}/pay': {
+                post: { 'x-payment-info': { protocols: ['mpp'] } },
+              },
+            },
+          });
+        }
+        if (url === `${origin}${path}`) {
+          expect(init?.method).toBe('GET');
+          expect(init?.body).toBeUndefined();
+          return new Response(null, {
+            status: 402,
+            headers: {
+              'WWW-Authenticate': `${tempoChallengeHeader()}, ${stripeChallengeHeader('network_123')}`,
+            },
+          });
+        }
+        return notFound();
+      });
+
+      const result = await runInspect(origin, {
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+      const discovered = result.available_tools?.machine_payments?.filter(
+        (tool) => tool.url === `${origin}${path}`,
+      );
+      expect(discovered).toEqual([
+        expect.objectContaining({
+          rail: 'tempo',
+          method: 'tempo',
+          command: `tempo request -X POST '${origin}${path}'`,
+        }),
+        expect.objectContaining({
+          rail: 'stripe_spt',
+          method: 'stripe',
+          credential_type: 'shared_payment_token',
+          command: `link-cli mpp pay '${origin}${path}' --method POST`,
+          description: expect.stringContaining(
+            'credential_type: shared_payment_token',
+          ),
+        }),
+      ]);
+      const requested = fetchImpl.mock.calls.map(([input]) => input.toString());
+      expect(requested.filter((url) => url === `${origin}${path}`)).toHaveLength(1);
+      expect(requested).not.toContain(`${origin}/api/x402/orders`);
+      expect(requested).not.toContain(`${origin}/known`);
+      expect(requested.some((url) => url.includes('{id}'))).toBe(false);
+      expect(
+        fetchImpl.mock.calls.every(
+          ([, init]) => !init?.method || init.method === 'GET',
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it('normalizes stripe_spt offers while retaining the Stripe wire method', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL) =>
+      input.toString().endsWith('/api/openapi.json')
+        ? jsonResponse(mppSpec(['stripe_spt']))
+        : notFound(),
+    );
+    const result = await runInspect('https://shop.example.com', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(result.available_tools?.machine_payments).toEqual([
+      expect.objectContaining({
+        method: 'stripe',
+        rail: 'stripe_spt',
+        credential_type: 'shared_payment_token',
+      }),
+    ]);
+    expect(fetchImpl.mock.calls.map(([input]) => input.toString())).not.toContain(
+      'https://shop.example.com/api/thing',
+    );
+  });
+
+  it('keeps supported challenges when another Stripe challenge is invalid', async () => {
+    const invalidStripe = stripeChallengeHeader('network_missing').replace(
+      /request="[^"]+"/,
+      `request="${encodeStripeRequest({ amount: '100', currency: 'usd' })}"`,
+    );
+    const result = await runInspect('https://shop.example.com', {
+      fetchImpl: (async (input: string | URL) =>
+        input.toString() === 'https://shop.example.com'
+          ? new Response(null, {
+              status: 402,
+              headers: {
+                'WWW-Authenticate': `${invalidStripe}, ${tempoChallengeHeader()}, ${stripeChallengeHeader('network_valid')}`,
+              },
+            })
+          : notFound()) as unknown as typeof fetch,
+    });
+    expect(
+      result.available_tools?.machine_payments?.map((tool) => tool.rail),
+    ).toEqual(['tempo', 'stripe_spt']);
+  });
+
+  it('does not infer Tempo from an x402-only manifest or probe unresolved order schemas', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.endsWith('/api/openapi.json')) {
+        return jsonResponse({
+          paths: {
+            '/x402': {
+              post: {
+                'x-payment-info': {
+                  protocols: ['x402'],
+                  offers: [{ method: 'stripe' }],
+                },
+              },
+            },
+            '/mpp': {
+              post: {
+                'x-payment-info': { protocols: ['mpp'] },
+                requestBody: {
+                  content: {
+                    'application/json': {
+                      schema: { $ref: '#/components/schemas/Order' },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        });
+      }
+      if (url.endsWith('/.well-known/x402.json')) {
+        return jsonResponse({ protocol: 'x402' });
+      }
+      if (url.endsWith('/mpp')) {
+        expect(init?.method).toBe('GET');
+        return new Response(null, { status: 405 });
+      }
+      return notFound();
+    });
+    const result = await runInspect('https://shop.example.com', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(result.available_tools).toBeUndefined();
+    expect(fetchImpl.mock.calls.map(([input]) => input.toString())).not.toContain(
+      'https://shop.example.com/x402',
+    );
+  });
+
+  it('bounds endpoint probes and concurrency for large OpenAPI documents', async () => {
+    let active = 0;
+    let peak = 0;
+    const probed: string[] = [];
+    const fetchImpl = vi.fn(async (input: string | URL) => {
+      const url = input.toString();
+      if (url.endsWith('/api/openapi.json')) {
+        return jsonResponse({
+          paths: Object.fromEntries(
+            Array.from({ length: 20 }, (_, index) => [
+              `/probe/${index}`,
+              { get: { 'x-payment-info': { protocols: ['mpp'] } } },
+            ]),
+          ),
+        });
+      }
+      if (url.includes('/probe/')) {
+        probed.push(url);
+        active++;
+        peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        active--;
+        if (url.endsWith('/0')) throw new Error('Endpoint unavailable');
+        return new Response(null, {
+          status: 402,
+          headers: {
+            'WWW-Authenticate': url.endsWith('/1')
+              ? 'invalid challenge'
+              : tempoChallengeHeader(),
+          },
+        });
+      }
+      return notFound();
+    });
+    const result = await runInspect('https://shop.example.com', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(probed).toHaveLength(12);
+    expect(peak).toBe(4);
+    expect(result.available_tools?.machine_payments).toHaveLength(10);
   });
 
   it('does not attempt a live probe when the spec already declares a stripe offer', async () => {
@@ -405,6 +649,42 @@ describe('runInspect', () => {
     expectNoNulls(result);
   });
 
+  it('excludes PostalForm documentation references from MCP tools', async () => {
+    const endpoint = 'https://postalform.com/mcp';
+    const fetchImpl = vi.fn(async (input: string | URL) => {
+      const url = input.toString();
+      if (url === 'https://postalform.com/.well-known/mcp.json') {
+        return jsonResponse({
+          description: 'Prepare and track physical mail.',
+          remotes: [{ url: endpoint }],
+        });
+      }
+      if (url === 'https://postalform.com/llms-full.txt') {
+        return textResponse(
+          [
+            '# PostalForm',
+            `- [PostalForm MCP](${endpoint})`,
+            '- [OpenAI remote MCP and connectors](https://developers.openai.com/api/docs/guides/tools-connectors-mcp)',
+            '- [Google Gemini MCP tools](https://ai.google.dev/gemini-api/docs/function-calling#model-context-protocol-mcp)',
+          ].join('\n'),
+        );
+      }
+      return notFound();
+    });
+
+    const result = await runInspect('https://postalform.com', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    expect(result.available_tools?.mcp).toEqual([
+      {
+        command: `'${endpoint}'`,
+        description: 'Prepare and track physical mail.',
+        url: endpoint,
+      },
+    ]);
+  });
+
   it('discovers MCP servers from well-known manifests', async () => {
     const fetchImpl = vi.fn(async (input: string | URL) => {
       const url = input.toString();
@@ -459,7 +739,7 @@ const HEADLESS_CHECKOUT = `${HEADLESS_ORIGIN}/checkout`;
 
 /**
  * In-process fake of myheadlessmerchant.com: one fetch router that serves
- * every inspect probe path (OpenAPI MPP, x402, UCP, HTML/LPT, MCP, llms.txt,
+ * every inspect probe path (OpenAPI MPP, UCP, HTML/LPT, MCP, llms.txt,
  * provisioning copy).
  */
 function fakeHeadlessMerchant(): typeof fetch {
@@ -504,11 +784,6 @@ function fakeHeadlessMerchant(): typeof fetch {
             },
           },
         },
-      }),
-    [`${HEADLESS_ORIGIN}/.well-known/x402.json`]: () =>
-      jsonResponse({
-        x402Version: 1,
-        accepts: [{ scheme: 'exact', network: 'stripe' }],
       }),
     [`${HEADLESS_ORIGIN}/.well-known/ucp`]: () =>
       jsonResponse({
@@ -592,9 +867,11 @@ describe('inspect fake merchant', () => {
         machine_payments: [
           {
             command: `link-cli mpp pay '${HEADLESS_ORIGIN}/api/orders' --method POST`,
-            description: 'Pay with MPP to create an order',
+            description: `Pay with MPP to create an order ${STRIPE_SPT_GUIDANCE}`,
             url: `${HEADLESS_ORIGIN}/api/orders`,
             method: 'stripe',
+            rail: 'stripe_spt',
+            credential_type: 'shared_payment_token',
           },
         ],
         mcp: [
@@ -629,7 +906,6 @@ describe('inspect fake merchant', () => {
     expect(requested).toEqual(
       expect.arrayContaining([
         `${HEADLESS_ORIGIN}/api/openapi.json`,
-        `${HEADLESS_ORIGIN}/.well-known/x402.json`,
         `${HEADLESS_ORIGIN}/.well-known/ucp`,
         HEADLESS_CHECKOUT,
         `${HEADLESS_ORIGIN}/.well-known/mcp.json`,
@@ -720,6 +996,32 @@ describe('inspect helpers', () => {
         '- [Shop MCP](https://shop.example.com/api/mcp)\n- [Docs](https://shop.example.com/docs)',
       ),
     ).toEqual([{ name: 'Shop MCP', url: 'https://shop.example.com/api/mcp' }]);
+  });
+
+  it('preserves custom MCP links while filtering documentation paths', () => {
+    expect(
+      extractMarkdownMcpLinks(
+        [
+          '- [Shop MCP](https://tools.example.com/connect?tenant=shop#transport)',
+          '- [Shop MCP endpoint](https://shop.example.com/docs/connect)',
+          '- [MCP server](https://gateway.example.com/)',
+          '- [MCP endpoint guide](https://shop.example.com/guides/mcp)',
+          '- [MCP server documentation](https://shop.example.com/docs/mcp)',
+          '- [MCP tutorial](https://shop.example.com/tutorials/mcp)',
+          '- [MCP docs](https://shop.example.com/documentation/mcp)',
+        ].join('\n'),
+      ),
+    ).toEqual([
+      {
+        name: 'Shop MCP',
+        url: 'https://tools.example.com/connect?tenant=shop#transport',
+      },
+      {
+        name: 'Shop MCP endpoint',
+        url: 'https://shop.example.com/docs/connect',
+      },
+      { name: 'MCP server', url: 'https://gateway.example.com/' },
+    ]);
   });
 
   it('shell-quotes command arguments', () => {

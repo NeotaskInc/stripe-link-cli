@@ -367,11 +367,13 @@ Required field: `url` (the origin of the inspected URL). Optional fields are omi
 
 It probes `llms.txt`, a [UCP](https://ucp.dev) profile at `/.well-known/ucp`, an [MPP](https://mpp.dev) OpenAPI spec at `/api/openapi.json` or `/openapi.json`, MCP well-known manifests, and the page HTML for a Link Pay Token steering block. Matching capabilities are returned under `available_tools`:
 
-- `machine_payments[]` — one entry per known MPP rail (`method: stripe` → `link-cli mpp pay '<endpoint>'`; `method: tempo` → `tempo request '<endpoint>'`)
+- `machine_payments[]` — one entry per known MPP rail. Stripe SPT entries include `rail: stripe_spt`, the MPP wire `method: stripe`, and `credential_type: shared_payment_token`, recommending `link-cli mpp pay '<endpoint>'`. Tempo entries include `rail: tempo` and `method: tempo`, recommending `tempo request '<endpoint>'`. Purchase commands retain the HTTP method declared in OpenAPI.
 - `mcp[]` — MCP server command, description, and URL
 - `browser_checkout` — `merchant_advice` / `general_advice` for paying in a browser with a Link card
 
-For MPP, it inspects each operation's `x-payment-info.offers[]` per the [MPP discovery spec](https://mpp.dev/advanced/discovery). When a spec doesn't break offers out by method, it falls back to a live probe of the endpoint and reads the real `WWW-Authenticate` challenge.
+For MPP, it inspects each operation's `x-payment-info.offers[]` per the [MPP discovery spec](https://mpp.dev/advanced/discovery). Operations explicitly declaring another protocol, such as x402 alone, are excluded. When MPP operations don't break offers out by method, it probes their endpoints with GET and reads all supported `WWW-Authenticate` challenges. Discovery is limited to 12 distinct endpoints with up to four concurrent probes; paths requiring parameters are skipped. If GET returns 405 and a minimal body can be built from an inline schema, it falls back to the declared purchase method. Unresolved `$ref` schemas are not used to synthesize purchase requests. An x402 manifest alone does not establish a supported MPP rail.
+
+For Stripe SPT, supply `--context` (at least 100 characters) and any required request body to `mpp pay`. It creates a spend request with `credential_type: shared_payment_token` and requests buyer approval, or accepts an existing approved SPT spend request via `--spend-request-id`.
 
 ### MPP
 

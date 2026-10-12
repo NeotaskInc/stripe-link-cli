@@ -1,7 +1,12 @@
+import { Challenge } from 'mppx';
 import { sanitizeDeep } from '../../utils/sanitize-text';
 import { decodeStripeChallenge } from '../mpp/decode';
 
 const DEFAULT_TIMEOUT_MS = 5000;
+const MAX_MPP_PROBES = 12;
+const MPP_PROBE_CONCURRENCY = 4;
+const STRIPE_SPT_GUIDANCE =
+  'Use mpp pay with --context (at least 100 characters) and any required request body. It creates a spend request with credential_type: shared_payment_token and requests buyer approval.';
 const LLMS_TXT_PATHS = ['/llms.txt', '/llms-full.txt'];
 const MCP_WELL_KNOWN_PATHS = [
   '/.well-known/mcp.json',
@@ -13,8 +18,11 @@ export interface InspectTool {
   command: string;
   description: string;
   url?: string;
-  /** MPP payment rail, when known. Omitted for non-MPP tools. */
+  /** MPP wire method, when known. Omitted for non-MPP tools. */
   method?: string;
+  /** Payment rail; Stripe MPP uses shared payment tokens. */
+  rail?: 'stripe_spt' | 'tempo';
+  credential_type?: 'shared_payment_token';
 }
 
 export interface BrowserCheckoutTool {
@@ -60,6 +68,7 @@ export interface MppOperation {
   summary?: string;
   description?: string;
   request_body_schema?: unknown;
+  protocols: string[];
   offers: MppOffer[];
 }
 
@@ -67,8 +76,6 @@ export interface MppOpenapiProbe extends EndpointProbe {
   api_title?: string;
   api_description?: string;
   api_guidance?: string;
-  offered_methods?: string[];
-  offers_stripe?: boolean;
   operations?: MppOperation[];
 }
 
@@ -106,9 +113,8 @@ export interface LiveChallengeProbe {
   method?: string;
   status?: number;
   found: boolean;
-  network_id?: string;
-  description?: string;
   error?: string;
+  offers: MppOffer[];
 }
 
 interface LinkPayTokenProbe {
@@ -259,7 +265,20 @@ export function extractMarkdownMcpLinks(
     if (!name || !url) continue;
     if (!/mcp/i.test(name) && !/mcp/i.test(url)) continue;
     try {
-      const absolute = new URL(url).toString();
+      const parsed = new URL(url);
+      // MCP mentions in documentation links aren't server declarations. Do
+      // not require a conventional endpoint path: explicitly labeled servers
+      // and endpoints can live anywhere, including under a docs path.
+      const documentationPath =
+        /(?:^|\/)(?:docs?|documentation|guides?|tutorials?)(?:\/|$)/i.test(
+          parsed.pathname,
+        );
+      const explicitEndpoint =
+        /\bmcp\b/i.test(name) &&
+        /\b(?:server|endpoint)\b/i.test(name) &&
+        !/\b(?:docs?|documentation|guides?|tutorials?)\b/i.test(name);
+      if (documentationPath && !explicitEndpoint) continue;
+      const absolute = parsed.toString();
       if (seen.has(absolute)) continue;
       seen.add(absolute);
       results.push({ name, url: absolute });
@@ -324,33 +343,6 @@ async function fetchWithTimeout(
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
-}
-
-async function probeJsonEndpoint(
-  fetchImpl: FetchLike,
-  url: string,
-  timeoutMs: number,
-): Promise<EndpointProbe> {
-  try {
-    const response = await fetchWithTimeout(fetchImpl, url, timeoutMs);
-    if (!response.ok) {
-      return { url, found: false, status: response.status };
-    }
-    const text = await response.text();
-    try {
-      JSON.parse(text);
-    } catch {
-      return {
-        url,
-        found: false,
-        status: response.status,
-        error: 'response was not valid JSON',
-      };
-    }
-    return { url, found: true, status: response.status };
-  } catch (err) {
-    return { url, found: false, error: errorMessage(err) };
-  }
 }
 
 // UCP merchant profiles (https://ucp.dev) nest everything under a top-level
@@ -531,10 +523,8 @@ function extractRequestBodySchema(operation: Record<string, unknown>): unknown {
 // `x-payment-info.offers[]`; each offer's `method` (e.g. "tempo", "stripe",
 // "evm") names a payment rail. Link's shared_payment_token flow only works
 // when "stripe" is among them -- most MPP integrations only offer crypto
-// rails like "tempo". Some specs (e.g. climate.stripe.dev) instead declare a
-// coarser `x-payment-info.protocols` list with no per-method breakdown; those
-// operations are still extracted (with an empty `offers`) so a live 402
-// probe can confirm stripe support (see probeLiveChallenge).
+// rails like "tempo". Protocol-only declarations require live discovery.
+// Explicitly non-MPP operations must not become MPP probe candidates.
 function extractOperations(spec: unknown): MppOperation[] {
   if (!spec || typeof spec !== 'object') return [];
   const paths = (spec as Record<string, unknown>).paths;
@@ -551,6 +541,16 @@ function extractOperations(spec: unknown): MppOperation[] {
       const op = operation as Record<string, unknown>;
       const paymentInfo = op['x-payment-info'];
       if (!paymentInfo || typeof paymentInfo !== 'object') continue;
+      const declaredProtocols = (paymentInfo as Record<string, unknown>)
+        .protocols;
+      const protocols = Array.isArray(declaredProtocols)
+        ? declaredProtocols
+            .filter(
+              (protocol): protocol is string => typeof protocol === 'string',
+            )
+            .map((protocol) => protocol.toLowerCase())
+        : [];
+      if (protocols.length > 0 && !protocols.includes('mpp')) continue;
 
       operations.push({
         path,
@@ -561,6 +561,7 @@ function extractOperations(spec: unknown): MppOperation[] {
         description:
           typeof op.description === 'string' ? op.description : undefined,
         request_body_schema: extractRequestBodySchema(op),
+        protocols,
         offers: extractOffers(paymentInfo),
       });
     }
@@ -599,13 +600,6 @@ async function probeMppOpenapiEndpoint(
       };
     }
     const operations = extractOperations(spec);
-    const methods = new Set<string>();
-    for (const operation of operations) {
-      for (const offer of operation.offers) {
-        methods.add(offer.method);
-      }
-    }
-    const offeredMethods = Array.from(methods);
     return {
       url,
       found: true,
@@ -613,8 +607,6 @@ async function probeMppOpenapiEndpoint(
       api_title: extractApiText(spec, 'title'),
       api_description: extractApiText(spec, 'description'),
       api_guidance: extractApiText(spec, 'guidance'),
-      offered_methods: offeredMethods,
-      offers_stripe: offeredMethods.includes('stripe'),
       operations,
     };
   } catch (err) {
@@ -822,17 +814,21 @@ function machinePaymentTool(
       rail === 'stripe'
         ? linkCliMppPayCommand(url, httpMethod)
         : tempoRequestCommand(url, httpMethod),
-    description,
+    description:
+      rail === 'stripe' ? `${description} ${STRIPE_SPT_GUIDANCE}` : description,
     url,
     method: rail,
+    rail: rail === 'stripe' ? 'stripe_spt' : 'tempo',
+    ...(rail === 'stripe'
+      ? { credential_type: 'shared_payment_token' as const }
+      : {}),
   };
 }
 
 function buildMachinePaymentTools(
   origin: string,
   mppMatch: MppOpenapiProbe | undefined,
-  liveChallenge: LiveChallengeProbe,
-  x402: EndpointProbe,
+  liveChallenges: LiveChallengeProbe[],
 ): InspectTool[] {
   const tools: InspectTool[] = [];
   const operations = mppMatch?.operations ?? [];
@@ -849,7 +845,7 @@ function buildMachinePaymentTools(
       mppMatch?.api_guidance ??
       'Pay with the machine payments protocol';
 
-    if (rails.has('stripe')) {
+    if (rails.has('stripe') || rails.has('stripe_spt')) {
       tools.push(
         machinePaymentTool(endpoint, operation.method, 'stripe', summary),
       );
@@ -861,29 +857,20 @@ function buildMachinePaymentTools(
     }
   }
 
-  if (liveChallenge.found && liveChallenge.url) {
-    const alreadyHasStripe = tools.some(
-      (tool) => tool.method === 'stripe' && tool.url === liveChallenge.url,
-    );
-    if (!alreadyHasStripe) {
+  for (const probe of liveChallenges) {
+    if (!probe.found || !probe.url) continue;
+    for (const offer of probe.offers) {
+      if (offer.method !== 'stripe' && offer.method !== 'tempo') continue;
       tools.push(
         machinePaymentTool(
-          liveChallenge.url,
-          liveChallenge.method,
-          'stripe',
-          liveChallenge.description ??
+          probe.url,
+          probe.method,
+          offer.method,
+          offer.description ??
             'Pay with the machine payments protocol to complete this 402 challenge',
         ),
       );
     }
-  }
-
-  if (tools.length === 0 && x402.found) {
-    tools.push({
-      command: tempoRequestCommand(x402.url),
-      description: 'Pay with the machine payments protocol (x402)',
-      url: x402.url,
-    });
   }
 
   return uniqueTools(tools);
@@ -982,20 +969,6 @@ function pickDescription(
   return mppMatch?.api_description;
 }
 
-// Prefer an operation that already declares a "stripe" offer; otherwise fall
-// back to the first payment-required operation, so the live probe below has
-// something concrete to try even when the spec doesn't break offers out by
-// method (e.g. climate.stripe.dev's `protocols`-only style).
-function pickPaymentOperation(
-  operations: MppOperation[] | undefined,
-): MppOperation | undefined {
-  if (!operations || operations.length === 0) return undefined;
-  return (
-    operations.find((op) => op.offers.some((o) => o.method === 'stripe')) ??
-    operations[0]
-  );
-}
-
 // Some MPP endpoints validate the request body before returning 402 (e.g.
 // climate.stripe.dev rejects a body missing "amount" with 400 rather than
 // challenging for payment first), so an empty `{}` isn't always enough to
@@ -1048,32 +1021,74 @@ function buildProbeBody(schema: unknown): string | undefined {
   return JSON.stringify(buildMinimalObject(schema as Record<string, unknown>));
 }
 
-// Ground-truth check for "stripe" support: actually hit the endpoint and read
-// the WWW-Authenticate header of the 402 response, the same way `mpp pay`/
-// `mpp decode` do. Used as a fallback when the openapi spec doesn't declare
-// per-method offers explicitly (see extractOperations).
+// Decode each challenge independently so an unsupported or invalid offer
+// cannot hide another supported rail. Stripe validation matches mpp pay.
+function parseChallengeOffers(header: string): MppOffer[] {
+  const offers: MppOffer[] = [];
+  for (const challenge of Challenge.deserializeList(header)) {
+    if (challenge.intent !== 'charge' && challenge.intent !== 'session') continue;
+    if (challenge.method === 'stripe') {
+      try {
+        const decoded = decodeStripeChallenge(Challenge.serialize(challenge));
+        offers.push({ method: 'stripe', description: decoded.description });
+      } catch {
+        // This Stripe challenge cannot be used by Link's SPT flow.
+      }
+    } else if (challenge.method === 'tempo') {
+      offers.push({ method: 'tempo', description: challenge.description });
+    }
+  }
+  return offers;
+}
+
+// A merchant can serve a discovery challenge on GET while requiring POST
+// for the purchase. Retain the declared purchase method in the result.
 async function probeLiveChallenge(
   fetchImpl: FetchLike,
   origin: string,
   targetUrl: string,
   operation: MppOperation | undefined,
   timeoutMs: number,
+  requestMethod = 'GET',
 ): Promise<LiveChallengeProbe> {
   const url = operation
     ? new URL(operation.path, origin).toString()
     : targetUrl;
   const method = operation?.method ?? 'GET';
   const body =
-    method === 'GET' || method === 'HEAD'
+    requestMethod === 'GET' || requestMethod === 'HEAD'
       ? undefined
       : buildProbeBody(operation?.request_body_schema);
   const init: RequestInit =
     body !== undefined
-      ? { method, body, headers: { 'Content-Type': 'application/json' } }
-      : { method };
+      ? {
+          method: requestMethod,
+          body,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      : { method: requestMethod };
 
   try {
     const response = await fetchWithTimeout(fetchImpl, url, timeoutMs, init);
+    await response.body?.cancel();
+    // Retain the existing inline-schema fallback for endpoints that explicitly
+    // reject GET. Never synthesize orders from unresolved $ref schemas.
+    if (
+      response.status === 405 &&
+      requestMethod === 'GET' &&
+      method !== 'GET' &&
+      method !== 'HEAD' &&
+      buildProbeBody(operation?.request_body_schema) !== undefined
+    ) {
+      return probeLiveChallenge(
+        fetchImpl,
+        origin,
+        targetUrl,
+        operation,
+        timeoutMs,
+        method,
+      );
+    }
     if (response.status !== 402) {
       return {
         attempted: true,
@@ -1081,6 +1096,7 @@ async function probeLiveChallenge(
         method,
         status: response.status,
         found: false,
+        offers: [],
       };
     }
     const header = response.headers.get('www-authenticate');
@@ -1092,18 +1108,18 @@ async function probeLiveChallenge(
         status: 402,
         found: false,
         error: 'missing WWW-Authenticate header',
+        offers: [],
       };
     }
     try {
-      const decoded = decodeStripeChallenge(header);
+      const offers = parseChallengeOffers(header);
       return {
         attempted: true,
         url,
         method,
         status: 402,
-        found: true,
-        network_id: decoded.network_id,
-        description: decoded.description,
+        found: offers.length > 0,
+        offers,
       };
     } catch (err) {
       return {
@@ -1113,6 +1129,7 @@ async function probeLiveChallenge(
         status: 402,
         found: false,
         error: errorMessage(err),
+        offers: [],
       };
     }
   } catch (err) {
@@ -1122,8 +1139,56 @@ async function probeLiveChallenge(
       method,
       found: false,
       error: errorMessage(err),
+      offers: [],
     };
   }
+}
+
+async function probeMppChallenges(
+  fetchImpl: FetchLike,
+  origin: string,
+  targetUrl: string,
+  spec: MppOpenapiProbe | undefined,
+  timeoutMs: number,
+): Promise<LiveChallengeProbe[]> {
+  if (!spec) {
+    return [
+      await probeLiveChallenge(
+        fetchImpl,
+        origin,
+        targetUrl,
+        undefined,
+        timeoutMs,
+      ),
+    ];
+  }
+
+  const candidates = new Map<string, MppOperation>();
+  for (const operation of spec.operations ?? []) {
+    // Explicit offers are sufficient. Parameterized paths need real purchase
+    // inputs and cannot be probed from an origin alone.
+    if (operation.offers.length > 0 || /[{}]/.test(operation.path)) continue;
+    const endpoint = new URL(operation.path, origin).toString();
+    const existing = candidates.get(endpoint);
+    if (!existing || (existing.method === 'GET' && operation.method !== 'GET')) {
+      candidates.set(endpoint, operation);
+    }
+  }
+
+  const operations = Array.from(candidates.values()).slice(0, MAX_MPP_PROBES);
+  const results: LiveChallengeProbe[] = [];
+  for (let start = 0; start < operations.length; start += MPP_PROBE_CONCURRENCY) {
+    results.push(
+      ...(await Promise.all(
+        operations
+          .slice(start, start + MPP_PROBE_CONCURRENCY)
+          .map((operation) =>
+            probeLiveChallenge(fetchImpl, origin, targetUrl, operation, timeoutMs),
+          ),
+      )),
+    );
+  }
+  return results;
 }
 
 function toInspectResult(input: {
@@ -1131,8 +1196,7 @@ function toInspectResult(input: {
   page: PageProbe;
   ucp: UcpProbe;
   mppMatch: MppOpenapiProbe | undefined;
-  liveChallenge: LiveChallengeProbe;
-  x402: EndpointProbe;
+  liveChallenges: LiveChallengeProbe[];
   linkPayToken: LinkPayTokenProbe;
   llmsTxt: LlmsTxtFile[];
   mcpServers: DiscoveredMcpServer[];
@@ -1140,8 +1204,7 @@ function toInspectResult(input: {
   const machinePayments = buildMachinePaymentTools(
     input.origin,
     input.mppMatch,
-    input.liveChallenge,
-    input.x402,
+    input.liveChallenges,
   );
   const mcp = buildMcpTools(input.ucp, input.mcpServers, input.llmsTxt);
   const browserCheckout = buildBrowserCheckout(
@@ -1180,9 +1243,8 @@ export async function runInspect(
   }
   const origin = `${parsed.protocol}//${parsed.host}`;
 
-  const [mppOpenapi, x402, ucp, page, wellKnownMcp] = await Promise.all([
+  const [mppOpenapi, ucp, page, wellKnownMcp] = await Promise.all([
     probeMppOpenapi(fetchImpl, origin, timeoutMs),
-    probeJsonEndpoint(fetchImpl, `${origin}/.well-known/x402.json`, timeoutMs),
     probeUcpEndpoint(fetchImpl, `${origin}/.well-known/ucp`, timeoutMs),
     probePage(fetchImpl, url, timeoutMs),
     probeMcpWellKnown(fetchImpl, origin, timeoutMs),
@@ -1197,18 +1259,13 @@ export async function runInspect(
   );
 
   const mppMatch = mppOpenapi.find((p) => p.found);
-  const operation = pickPaymentOperation(mppMatch?.operations);
-
-  // Only fall back to a live 402 probe when the openapi spec didn't already
-  // give us a confident "stripe" answer -- e.g. climate.stripe.dev's spec
-  // declares `protocols: ["mpp","x402"]` with no per-method offers, so the
-  // static check alone can't tell whether "stripe" is actually accepted.
-  const liveChallenge = mppMatch?.offers_stripe
-    ? {
-        attempted: false as const,
-        found: false as const,
-      }
-    : await probeLiveChallenge(fetchImpl, origin, url, operation, timeoutMs);
+  const liveChallenges = await probeMppChallenges(
+    fetchImpl,
+    origin,
+    url,
+    mppMatch,
+    timeoutMs,
+  );
 
   const linkPayToken = detectLinkPayToken(page);
 
@@ -1217,8 +1274,7 @@ export async function runInspect(
     page,
     ucp,
     mppMatch,
-    liveChallenge,
-    x402,
+    liveChallenges,
     linkPayToken,
     llmsTxt,
     mcpServers: wellKnownMcp,
