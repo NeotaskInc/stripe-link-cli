@@ -28,19 +28,19 @@ type Result = {
 function print(event: Record<string, unknown>) {
   const e = event as Event;
   if (e.event === 'ready') {
+    const tasks = e.tasks as Task[];
     const seconds = Number(e.timeout_seconds);
-    const limit =
-      seconds % 60
-        ? `${seconds} second${seconds === 1 ? '' : 's'}`
-        : `${seconds / 60} minute${seconds === 60 ? '' : 's'}`;
-    console.log(`Validating${seconds ? ` (times out in ${limit})` : ''}.`);
-    console.log('\nGive each task to your agent, one at a time in order:');
-    for (const [i, { task }] of (e.tasks as Task[]).entries()) {
-      console.log(`  ${i + 1}. ${task}`);
-    }
+    const limit = seconds % 60 ? `${seconds}s` : `${seconds / 60}m`;
     console.log(
-      '\nA person needs to approve the test-mode spend requests the agent creates.\n',
+      `\n${tasks.length} validation${tasks.length === 1 ? '' : 's'}${seconds ? ` · ${limit} timeout` : ''}`,
     );
+    console.log(
+      'Send these to your agent in order. Approve spend requests when prompted.\n',
+    );
+    for (const [i, { task }] of tasks.entries()) {
+      console.log(`${i + 1}. ${task}`);
+    }
+    console.log();
   } else if (e.event === 'progress') {
     console.log(`${e.validation}: ${e.step}${e.error ? ` (${e.error})` : ''}`);
   } else if (e.event === 'result') {
