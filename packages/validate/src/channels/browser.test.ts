@@ -1,4 +1,4 @@
-import type { Server } from 'node:http';
+import { request as httpRequest, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createValidationServer } from '../seller.ts';
@@ -73,5 +73,32 @@ it('accepts a well-formed card submission without calling Stripe', async () => {
     confirmed: true,
     payment: { card_last4: '4242' },
   });
+  expect(run.stripe).not.toHaveBeenCalled();
+});
+
+it('rejects an oversized form before it finishes uploading and keeps serving', async () => {
+  const run = await start();
+  const status = await new Promise<number | undefined>((resolve, reject) => {
+    const request = httpRequest(
+      `${run.url}/purchase`,
+      { method: 'POST' },
+      (response) => {
+        response.resume();
+        request.end();
+        resolve(response.statusCode);
+      },
+    );
+    request.on('error', reject);
+    request.setTimeout(1000, () =>
+      request.destroy(new Error('No rejection response')),
+    );
+    // Keep the upload open: rejecting it must not destroy the response socket.
+    request.write(
+      new URLSearchParams({ ...validForm, name: 'x'.repeat(8193) }).toString(),
+    );
+  });
+  expect(status).toBe(400);
+  expect(run.observe('card-browser-purchase').confirmed).toBe(false);
+  expect((await postForm(`${run.url}/purchase`, validForm)).status).toBe(200);
   expect(run.stripe).not.toHaveBeenCalled();
 });

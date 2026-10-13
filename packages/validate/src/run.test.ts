@@ -4,10 +4,13 @@ import { runValidation } from './run.ts';
 import { createSptAdapter } from './spt.ts';
 import { validations } from './validations/index.ts';
 
-type Event = { event?: string; [key: string]: unknown };
+type Task = { validation: string; url: string };
+type Event = { event?: string; tasks?: Task[]; [key: string]: unknown };
 type Result = { id: string; status: string; [key: string]: unknown };
 
 const address = { line_1: '123 Main St', country_code: 'US' };
+const [purchase] = validations.filter((v) => v.id === 'spt-api-purchase');
+const [cancel] = validations.filter((v) => v.id === 'spt-api-cancel');
 
 function run(timeoutMs: number, link: LinkCli) {
   const events: Event[] = [];
@@ -33,7 +36,7 @@ function run(timeoutMs: number, link: LinkCli) {
       events.push(event);
       if (event.event === 'ready') ready(event);
     },
-    validations: validations.filter((v) => v.channel === 'api'),
+    validations: [purchase, cancel],
     link,
     pollMs: 10,
     graceMs: 30,
@@ -45,9 +48,10 @@ function run(timeoutMs: number, link: LinkCli) {
   return { events, readyEvent, exit, results };
 }
 
-// Pays for and confirms the first task's purchase.
+// Pays for and confirms the API purchase task.
 async function buy(ready: Event, shipping_address = address) {
-  const url = (ready.tasks as { url: string }[])[0].url;
+  const url = ready.tasks?.find((task) => task.validation === purchase.id)?.url;
+  expect(url).toBeDefined();
   const post = (path: string, body: unknown) =>
     fetch(`${url}${path}`, {
       method: 'POST',
@@ -81,7 +85,10 @@ it('passes when the buyer ships to the default address and cancels', async () =>
   const ready = await validation.readyEvent;
   // Case and whitespace differences from the Link address record still match.
   await buy(ready, { line_1: ' 123 MAIN ST ', country_code: 'us' });
-  const cancelUrl = (ready.tasks as { url: string }[])[1].url;
+  const cancelUrl = ready.tasks?.find(
+    (task) => task.validation === cancel.id,
+  )?.url;
+  expect(cancelUrl).toBeDefined();
   const refused = await fetch(`${cancelUrl}/purchase`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

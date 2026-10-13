@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Address } from '../link.ts';
-import { type ChannelContext, readBody } from '../seller.ts';
+import { type ChannelContext, productLine, readBody } from '../seller.ts';
 
 // A record of strings, bounded by the 8 KiB request limit.
 const shippingBody = z.object({
@@ -11,7 +11,7 @@ const shippingBody = z.object({
 });
 const confirmationBody = z.object({ confirmation_token: z.string() });
 
-export async function readJson(context: ChannelContext) {
+async function readJson(context: ChannelContext) {
   try {
     return JSON.parse(await readBody(context.request)) as unknown;
   } catch {
@@ -21,8 +21,8 @@ export async function readJson(context: ChannelContext) {
 }
 
 // Charges an SPT purchase body for this validation's product and replies with
-// the payment evidence and a confirmation token. Shared by SPT channels.
-export async function purchase(context: ChannelContext, body: unknown) {
+// the payment evidence and a confirmation token.
+async function purchase(context: ChannelContext, body: unknown) {
   const { run, adapter, runId, report, reply, fail } = context;
   const { validation, observed } = run;
   const { product } = validation;
@@ -83,7 +83,7 @@ export async function purchase(context: ChannelContext, body: unknown) {
   }
 }
 
-export async function confirm(context: ChannelContext, body: unknown) {
+async function confirm(context: ChannelContext, body: unknown) {
   const { run, runId, report, reply, fail, response } = context;
   const parsed = confirmationBody.safeParse(body);
   if (
@@ -100,11 +100,6 @@ export async function confirm(context: ChannelContext, body: unknown) {
     report({ step: 'confirmed' });
   });
   reply(200, { ...run.observed.payment, status: 'passed', run_id: runId });
-}
-
-export function productLine(context: ChannelContext) {
-  const { product } = context.run.validation;
-  return `${product.name}, $${(product.amount / 100).toFixed(2)} USD${product.ships ? ', shipped' : ''}.`;
 }
 
 // Direct JSON API: GET / (store page), GET /api (docs), POST /purchase, /confirm.

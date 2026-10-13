@@ -1,6 +1,6 @@
-import { defaultShippingAddress, sameAddress } from '../link.ts';
 import type { Observed } from '../seller.ts';
 import type { Scenario } from './index.ts';
+import { evaluateShipping } from './shipping.ts';
 
 function nextSteps(observed: Observed) {
   if (observed.error) {
@@ -27,28 +27,7 @@ export const card: Scenario[] = [
           next_steps: nextSteps(observed),
         };
       }
-      const shipping = await defaultShippingAddress(link);
-      if ('skipped' in shipping) {
-        return {
-          status: 'passed',
-          ...observed.payment,
-          shipping: 'skipped',
-          shipping_note: shipping.skipped,
-        };
-      }
-      if (
-        observed.shipping_address &&
-        sameAddress(shipping.address, observed.shipping_address)
-      ) {
-        return { status: 'passed', ...observed.payment, shipping: 'passed' };
-      }
-      return {
-        status: 'failed',
-        ...observed.payment,
-        shipping: 'failed',
-        error:
-          'The order shipped to an address other than the default Link shipping address.',
-      };
+      return evaluateShipping(observed, link);
     },
   },
 ];

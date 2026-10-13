@@ -1,5 +1,5 @@
+import { checkoutPage, purchase } from '../checkout.ts';
 import type { ChannelContext } from '../seller.ts';
-import { checkoutPage, purchase } from './browser.ts';
 
 // Expose the card checkout form as a declarative WebMCP tool. Chrome derives
 // its input schema from the form fields and fills them before submitting.

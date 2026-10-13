@@ -16,7 +16,6 @@ export type PaymentAdapter = {
   documentation: Record<string, unknown> & {
     credential: Record<string, string>;
   };
-  secretKey: string;
   // Return payment evidence only after verifying the completed test payment.
   // A terminal error means this validation can no longer pass.
   purchase(
@@ -78,10 +77,16 @@ export type ChannelContext = {
   fail: (status: number, message: string) => void;
 };
 
+export function productLine(context: ChannelContext) {
+  const { product } = context.run.validation;
+  return `${product.name}, $${(product.amount / 100).toFixed(2)} USD${product.ships ? ', shipped' : ''}.`;
+}
+
 export async function readBody(request: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const chunk of request) {
+  // Keep the socket open so callers can reply when a body exceeds the limit.
+  for await (const chunk of request.iterator({ destroyOnReturn: false })) {
     size += chunk.length;
     if (size > 8192) throw new Error('Request too large');
     chunks.push(chunk);
