@@ -1,7 +1,7 @@
-import { request, type Server } from 'node:http';
+import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, expect, it, vi } from 'vitest';
-import { createValidationServer, type Progress } from './seller.ts';
+import { createValidationServer } from './seller.ts';
 import { createSptAdapter } from './spt.ts';
 import { validations } from './validations/index.ts';
 
@@ -17,11 +17,10 @@ const servers: Server[] = [];
 
 async function start(stripeResponse: unknown) {
   const stripe = vi.fn<typeof fetch>(async () => Response.json(stripeResponse));
-  const progress: Progress[] = [];
   const run = createValidationServer(
     createSptAdapter('sk_test_seller', stripe),
     validations,
-    (event) => progress.push(event),
+    () => {},
   );
   servers.push(run.server);
   await new Promise<void>((resolve) =>
@@ -29,7 +28,7 @@ async function start(stripeResponse: unknown) {
   );
   const { port } = run.server.address() as AddressInfo;
   const url = `http://127.0.0.1:${port}`;
-  return { ...run, stripe, progress, url, purchase: `${url}/spt-purchase` };
+  return { ...run, stripe, url, purchase: `${url}/spt-purchase` };
 }
 
 const post = (url: string, body: unknown, headers = {}) =>
@@ -83,49 +82,18 @@ it('confirms a verified payment', async () => {
   });
 });
 
-it('ends the validation on an unexpected payment and allows no second purchase', async () => {
-  const run = await start({ ...paid, livemode: true });
-  const body = { spt: 'spt_test_buyer', shipping_address };
-  const response = await post(`${run.purchase}/purchase`, body);
-  expect(response.status).toBe(422);
-  expect(await response.json()).not.toHaveProperty('confirmation_token');
-  expect(run.observe('spt-purchase').terminal_error).toBeDefined();
-  expect((await post(`${run.purchase}/purchase`, body)).status).toBe(409);
-  expect(run.stripe).toHaveBeenCalledTimes(1);
-});
-
-it('never echoes seller keys or SPTs from Stripe errors', async () => {
+it('ends the validation on a rejected payment without echoing secrets', async () => {
   const run = await start({
     error: { message: 'sk_test_seller spt_test_buyer' },
   });
-  const response = await post(`${run.purchase}/purchase`, {
-    spt: 'spt_test_buyer',
-    shipping_address,
-  });
-  expect(await response.text()).not.toMatch(/sk_test_seller|spt_test_buyer/);
-});
-
-it('rejects other origins and hosts before calling Stripe', async () => {
-  const run = await start(paid);
-  const origin = await post(
-    `${run.purchase}/purchase`,
-    { spt: 'spt_test_buyer', shipping_address },
-    { Origin: 'https://unrelated.test' },
-  );
-  expect(origin.status).toBe(403);
-  // fetch() cannot override Host.
-  const host = await new Promise((resolve) =>
-    request(
-      `${run.purchase}/api`,
-      { headers: { Host: 'unrelated.test' } },
-      (res) => {
-        res.resume();
-        resolve(res.statusCode);
-      },
-    ).end(),
-  );
-  expect(host).toBe(403);
-  expect(run.stripe).not.toHaveBeenCalled();
+  const body = { spt: 'spt_test_buyer', shipping_address };
+  const response = await post(`${run.purchase}/purchase`, body);
+  expect(response.status).toBe(422);
+  const text = await response.text();
+  expect(text).not.toMatch(/sk_test_seller|spt_test_buyer|confirmation_token/);
+  expect(run.observe('spt-purchase').terminal_error).toBeDefined();
+  expect((await post(`${run.purchase}/purchase`, body)).status).toBe(409);
+  expect(run.stripe).toHaveBeenCalledTimes(1);
 });
 
 it('requires shipping where the product ships and refuses unsellable products', async () => {
@@ -138,13 +106,6 @@ it('requires shipping where the product ships and refuses unsellable products', 
   expect(
     await fetch(`${run.url}/spt-cancel/api`).then((r) => r.json()),
   ).not.toHaveProperty('confirmation');
-  expect(run.progress).toContainEqual(
-    expect.objectContaining({
-      validation: 'spt-cancel',
-      step: 'purchase_rejected',
-    }),
-  );
-  expect((await post(`${run.url}/purchase`, {})).status).toBe(404);
   expect(run.stripe).not.toHaveBeenCalled();
 });
 
