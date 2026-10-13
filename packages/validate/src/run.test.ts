@@ -66,22 +66,30 @@ const link =
     args[0] === 'shipping-address'
       ? [{ is_default: true, address }]
       : spendRequests;
-const canceled = link([
-  {
-    network_id: 'profile_test_seller',
-    amount: 200,
-    created_at: new Date().toISOString(),
-    status: 'canceled',
-  },
-]);
+// The cancel validation's spend request, as Link reports it.
+const fieldGuide = {
+  network_id: 'profile_test_seller',
+  amount: 200,
+  created_at: new Date().toISOString(),
+  status: 'pending_approval',
+};
 
 it('passes when the buyer ships to the default address and cancels', async () => {
-  const validation = run(0, canceled);
+  const request = { ...fieldGuide };
+  const validation = run(0, link([request]));
+  const ready = await validation.readyEvent;
   // Case and whitespace differences from the Link address record still match.
-  await buy(await validation.readyEvent, {
-    line_1: ' 123 MAIN ST ',
-    country_code: 'us',
+  await buy(ready, { line_1: ' 123 MAIN ST ', country_code: 'us' });
+  const cancelUrl = (ready.tasks as { url: string }[])[1].url;
+  const refused = await fetch(`${cancelUrl}/purchase`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ spt: 'spt_test_guide' }),
   });
+  expect(await refused.json()).toEqual({
+    error: 'We are out of stock. Your payment was not processed.',
+  });
+  request.status = 'canceled';
   expect(await validation.exit).toBe(0);
   expect(validation.results()).toMatchObject({
     'spt-purchase': { status: 'passed', shipping: 'passed' },
@@ -90,7 +98,7 @@ it('passes when the buyer ships to the default address and cancels', async () =>
 });
 
 it('fails when the buyer ships elsewhere', async () => {
-  const validation = run(0, canceled);
+  const validation = run(0, link([fieldGuide]));
   await buy(await validation.readyEvent, {
     line_1: '456 Other St',
     country_code: 'US',

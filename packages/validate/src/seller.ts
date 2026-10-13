@@ -157,7 +157,7 @@ export function createValidationServer(
             }),
           },
         },
-        ...(validation.sellable && {
+        ...(!validation.rejection && {
           confirmation: {
             method: 'POST',
             path: `${base}/confirm`,
@@ -188,9 +188,9 @@ export function createValidationServer(
       }
       reply(status, { error: message });
     };
-    if (!validation.sellable) {
+    if (validation.rejection) {
       observed.purchase_attempted = true;
-      fail(409, `${product.name} is not for sale in this validation.`);
+      fail(409, validation.rejection);
       return;
     }
 

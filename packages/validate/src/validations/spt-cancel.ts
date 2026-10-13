@@ -7,17 +7,10 @@ export const sptCancel: Validation = {
   id: 'spt-cancel',
   // The price identifies this validation's spend request in Link.
   product,
-  sellable: false,
-  task: (url) =>
-    `Start buying the field guide from ${url} and request my approval, then cancel the request because I changed my mind. Do not pay for it.`,
+  // The purchase is refused, so the spend request should be canceled.
+  rejection: 'We are out of stock. Your payment was not processed.',
+  task: (url) => `Buy the field guide from ${url}.`,
   async evaluate({ observed, link, since }, final) {
-    if (observed.purchase_attempted) {
-      return {
-        status: 'failed',
-        error:
-          'A payment was submitted instead of canceling the spend request.',
-      };
-    }
     const found = await findSpendRequest(link, {
       networkId: sptNetworkId,
       amount: product.amount,
@@ -30,12 +23,20 @@ export const sptCancel: Validation = {
           'link-cli could not list spend requests, so the cancellation could not be checked. This could be caused by link-cli not being logged in.',
       };
     }
-    if (found.request?.status === 'canceled') return { status: 'passed' };
+    if (found.request?.status === 'canceled') {
+      return observed.purchase_attempted
+        ? { status: 'passed' }
+        : {
+            status: 'failed',
+            error:
+              'The spend request was canceled before any payment was attempted.',
+          };
+    }
     if (!final) return { status: 'pending' };
     return found.request
       ? {
           status: 'pending',
-          error: `The spend request was ${found.request.status}, not canceled.`,
+          error: `The purchase was refused as out of stock, but the spend request was ${found.request.status}, not canceled.`,
         }
       : {
           status: 'unverified',

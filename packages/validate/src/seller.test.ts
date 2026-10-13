@@ -96,7 +96,7 @@ it('ends the validation on a rejected payment without echoing secrets', async ()
   expect(run.stripe).toHaveBeenCalledTimes(1);
 });
 
-it('requires shipping where the product ships and refuses unsellable products', async () => {
+it('requires shipping where the product ships and refuses out-of-stock products', async () => {
   const run = await start(paid);
   expect(
     (await post(`${run.purchase}/purchase`, { spt: 'spt_test_buyer' })).status,

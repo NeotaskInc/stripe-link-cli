@@ -14,8 +14,8 @@ export type Validation = {
   // URL path segment and result id.
   id: string;
   product: { name: string; amount: number; ships: boolean };
-  // When false, the seller rejects payment for this product.
-  sellable: boolean;
+  // When set, the seller refuses payment with this message instead of charging.
+  rejection?: string;
   task: (url: string) => string;
   // Called on every poll until it returns a final status. `final` is set when
   // the run is ending; a still-pending verdict then becomes timed_out.

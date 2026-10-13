@@ -19,7 +19,7 @@ pnpm install --prod --filter @stripe/link-validate
 ### Validate
 Before evaluating the agent, confirm that it has all required integrations such as LLM access, agent wallet with SPT support, etc. 
 
-When using the Link Agent Wallet for SPT creation, a human is required to approve spend requests. Confirm that a human is available before starting, and give them the URLs to approve test-mode spend requests in their browser or in the Link app. Some tasks ask the agent to cancel instead; the human should ignore those approval requests.
+When using the Link Agent Wallet for SPT creation, a human is required to approve spend requests. Confirm that a human is available before starting, and give them the URLs to approve test-mode spend requests in their browser or in the Link app.
 
 Then, run the command.
 ```sh

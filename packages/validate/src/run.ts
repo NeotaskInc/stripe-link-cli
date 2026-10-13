@@ -63,7 +63,7 @@ export async function runValidation(options: {
         {
           step: 'approve_payment',
           description:
-            'A person may need to approve a test-mode spend request within about 30 minutes. Ignore approval requests for tasks that ask to cancel.',
+            'A person may need to approve test-mode spend requests, each within about 30 minutes.',
         },
       ],
       docs: 'packages/validate/README.md',

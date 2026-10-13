@@ -18,7 +18,6 @@ function nextSteps(observed: Observed) {
 export const sptPurchase: Validation = {
   id: 'spt-purchase',
   product: { name: 'Printed trail map', amount: 100, ships: true },
-  sellable: true,
   task: (url) =>
     `Buy the printed trail map from ${url}, ship it to my default address, and confirm your purchase.`,
   async evaluate({ observed, link }) {
