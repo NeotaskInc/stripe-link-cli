@@ -24,14 +24,10 @@ export async function runValidation(options: {
   validations?: Validation[];
   link?: LinkCli;
   pollMs?: number;
-  // Tasks run in order. A validation still pending this long after the
-  // previous one finished is evaluated as final.
-  graceMs?: number;
 }): Promise<number> {
   const { adapter, timeoutMs, signal, write } = options;
   const validations = options.validations ?? defaultValidations;
   const link = options.link ?? linkCli;
-  const graceMs = options.graceMs ?? 300_000;
   // Allow for clock skew between this machine and Link.
   const since = Date.now() - 60_000;
   const { server, runId, observe } = createValidationServer(
@@ -61,6 +57,7 @@ export async function runValidation(options: {
       event: 'ready',
       run_id: runId,
       tasks,
+      score: { passed: 0, total: validations.length },
       timeout_seconds: timeoutMs / 1000 || null,
       requires_human: [
         {
@@ -77,18 +74,25 @@ export async function runValidation(options: {
         { observed: observe(validation.id), link, since },
         final,
       );
-    // One map of settled verdicts, keyed by validation id, each with the time
-    // it settled (used to grace the next validation in order).
-    const finished = new Map<string, { verdict: Verdict; at: number }>();
+    const finished = new Map<string, Verdict>();
+    const score = (verdicts: Iterable<{ status: string }>) => ({
+      passed: Array.from(verdicts).filter((v) => v.status === 'passed').length,
+      total: validations.length,
+    });
     const settled = new Promise<void>((resolve) => {
       const tick = async () => {
-        for (const [index, validation] of validations.entries()) {
+        for (const validation of validations) {
           if (finished.has(validation.id)) continue;
-          const prev = finished.get(validations[index - 1]?.id ?? '');
-          const graceOver = !!prev && Date.now() - prev.at > graceMs;
-          const verdict = await evaluate(validation, graceOver);
-          if (verdict.status !== 'pending' || graceOver) {
-            finished.set(validation.id, { verdict, at: Date.now() });
+          const verdict = await evaluate(validation, false);
+          if (done) return;
+          if (verdict.status !== 'pending') {
+            finished.set(validation.id, verdict);
+            write({
+              event: 'validation',
+              validation: validation.id,
+              ...verdict,
+              score: score(finished.values()),
+            });
           }
         }
         if (finished.size === validations.length) resolve();
@@ -102,12 +106,12 @@ export async function runValidation(options: {
       signal.addEventListener('abort', () => resolve('interrupted'));
     });
     const stop = await Promise.race([settled.then(() => undefined), stopped]);
+    done = true;
 
     const results = [];
     for (const validation of validations) {
       const verdict =
-        finished.get(validation.id)?.verdict ??
-        (await evaluate(validation, true));
+        finished.get(validation.id) ?? (await evaluate(validation, true));
       results.push({
         id: validation.id,
         ...verdict,
@@ -123,7 +127,13 @@ export async function runValidation(options: {
           : results.some((r) => r.status === 'timed_out')
             ? 'timed_out'
             : 'passed';
-    write({ event: 'result', status, run_id: runId, validations: results });
+    write({
+      event: 'result',
+      status,
+      run_id: runId,
+      validations: results,
+      score: score(results),
+    });
     return exitCodes[status];
   } finally {
     done = true;

@@ -39,7 +39,6 @@ function run(timeoutMs: number, link: LinkCli) {
     validations: [purchase, cancel],
     link,
     pollMs: 10,
-    graceMs: 30,
   });
   const results = () =>
     Object.fromEntries(
@@ -79,12 +78,10 @@ const fieldGuide = {
   status: 'pending_approval',
 };
 
-it('passes when the buyer ships to the default address and cancels', async () => {
+it('reports incremental scores when tasks finish out of order', async () => {
   const request = { ...fieldGuide };
   const validation = run(0, link([request]));
   const ready = await validation.readyEvent;
-  // Case and whitespace differences from the Link address record still match.
-  await buy(ready, { line_1: ' 123 MAIN ST ', country_code: 'us' });
   const cancelUrl = ready.tasks?.find(
     (task) => task.validation === cancel.id,
   )?.url;
@@ -98,7 +95,22 @@ it('passes when the buyer ships to the default address and cancels', async () =>
     error: 'We are out of stock. Your payment was not processed.',
   });
   request.status = 'canceled';
+  await vi.waitFor(() => {
+    expect(validation.events).toContainEqual(
+      expect.objectContaining({
+        event: 'validation',
+        validation: cancel.id,
+        status: 'passed',
+        score: { passed: 1, total: 2 },
+      }),
+    );
+  });
+  // Case and whitespace differences from the Link address record still match.
+  await buy(ready, { line_1: ' 123 MAIN ST ', country_code: 'us' });
   expect(await validation.exit).toBe(0);
+  expect(validation.events.at(-1)).toMatchObject({
+    score: { passed: 2, total: 2 },
+  });
   expect(validation.results()).toMatchObject({
     'spt-api-purchase': { status: 'passed', shipping: 'passed' },
     'spt-api-cancel': { status: 'passed' },
@@ -106,22 +118,41 @@ it('passes when the buyer ships to the default address and cancels', async () =>
 });
 
 it('fails when the buyer ships elsewhere', async () => {
-  const validation = run(0, link([fieldGuide]));
+  const validation = run(300, link([fieldGuide]));
   await buy(await validation.readyEvent, {
     line_1: '456 Other St',
     country_code: 'US',
   });
   expect(await validation.exit).toBe(2);
+  expect(validation.events.at(-1)).toMatchObject({
+    score: { passed: 0, total: 2 },
+  });
   expect(validation.results()['spt-api-purchase']).toMatchObject({
     status: 'failed',
     shipping: 'failed',
   });
 });
 
-it('marks a validation unverified after the grace period', async () => {
-  const validation = run(0, link([]));
+it('leaves unfinished cases pending until the overall deadline', async () => {
+  const validation = run(300, link([]));
   await buy(await validation.readyEvent);
+  await vi.waitFor(() => {
+    expect(validation.events).toContainEqual(
+      expect.objectContaining({
+        event: 'validation',
+        validation: purchase.id,
+        status: 'passed',
+        score: { passed: 1, total: 2 },
+      }),
+    );
+  });
+  expect(validation.events.some((event) => event.event === 'result')).toBe(
+    false,
+  );
   expect(await validation.exit).toBe(0);
+  expect(validation.events.at(-1)).toMatchObject({
+    score: { passed: 1, total: 2 },
+  });
   expect(validation.results()['spt-api-cancel']).toMatchObject({
     status: 'unverified',
   });

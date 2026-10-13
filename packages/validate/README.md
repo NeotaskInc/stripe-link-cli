@@ -28,7 +28,7 @@ pnpm validate
 
 Run a subset with `pnpm validate --channel <channel>`; `pnpm validate --help` lists the channels. Some tasks need the agent to drive a real browser on this machine.
 
-It will return `tasks`, which are prompts directing the shopping agent to your test seller. Feed each prompt to the agent verbatim, in its own conversation, one at a time in the order listed, and let it work. The validator exits on its own and outputs a report, whether or not the validation succeeds.
+It will return `tasks`, which are prompts directing the shopping agent to your test seller. Feed each prompt to the agent verbatim, in its own conversation; tasks can run in any order or concurrently. The table shows progress and the number of validations passed. Only the overall `--timeout` limits the run. The validator exits on its own and outputs a report, whether or not the validation succeeds.
 
 SPTs are one-time use. If you abandon a run, make sure to cancel any pending spend requests as cleanup.
 

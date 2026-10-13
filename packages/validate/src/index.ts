@@ -1,5 +1,6 @@
 import { parseArgs } from 'node:util';
 import { type Channel, channels } from './channels/index.ts';
+import { createPrinter } from './output.ts';
 import { runValidation } from './run.ts';
 import { createSptAdapter } from './spt.ts';
 import { readStripeTestKey } from './stripe-config.ts';
@@ -8,49 +9,13 @@ import { validations } from './validations/index.ts';
 const help = `Usage: pnpm validate [--channel <channels>] [--timeout <seconds>] [--port <port>] [--json]
 
 Starts a local test seller and prints a task for each validation. Give each task
-to the buyer agent, one at a time in order. Reads Link data through link-cli.
+to the buyer agent in any order or concurrently. Reads Link data through link-cli.
 See packages/validate/README.md.
 
 --channel limits the run to payment channels, comma-separated (${Object.keys(channels).join(', ')}).
 --timeout defaults to 1800 seconds; 0 waits indefinitely.
 --json prints one JSON event per line, for scripts.
 Exit codes: 0 passed, 1 setup error, 2 failed, 3 timed out, 130 interrupted.`;
-
-type Event = Record<string, unknown> & { event: string };
-type Task = { task: string };
-type Result = {
-  id: string;
-  status: string;
-  error?: string;
-  next_steps?: string;
-};
-
-function print(event: Record<string, unknown>) {
-  const e = event as Event;
-  if (e.event === 'ready') {
-    const tasks = e.tasks as Task[];
-    const seconds = Number(e.timeout_seconds);
-    const limit = seconds % 60 ? `${seconds}s` : `${seconds / 60}m`;
-    console.log(
-      `\n${tasks.length} validation${tasks.length === 1 ? '' : 's'}${seconds ? ` · ${limit} timeout` : ''}`,
-    );
-    console.log(
-      'Send these to your agent in order. Approve spend requests when prompted.\n',
-    );
-    for (const [i, { task }] of tasks.entries()) {
-      console.log(`${i + 1}. ${task}`);
-    }
-    console.log();
-  } else if (e.event === 'progress') {
-    console.log(`${e.validation}: ${e.step}${e.error ? ` (${e.error})` : ''}`);
-  } else if (e.event === 'result') {
-    console.log(`\nResult: ${e.status}`);
-    for (const { id, status, error, next_steps } of e.validations as Result[]) {
-      const detail = next_steps ?? error;
-      console.log(`  ${id}: ${status}${detail ? `\n    ${detail}` : ''}`);
-    }
-  }
-}
 
 async function main() {
   const { values } = parseArgs({
@@ -94,7 +59,9 @@ async function main() {
     validations: chosen,
     timeoutMs: timeout * 1000,
     signal: interrupt.signal,
-    write: values.json ? (event) => console.log(JSON.stringify(event)) : print,
+    write: values.json
+      ? (event) => console.log(JSON.stringify(event))
+      : createPrinter(),
   });
 }
 

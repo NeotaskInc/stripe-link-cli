@@ -33,7 +33,7 @@ export type Scenario = Omit<Validation, 'id' | 'channel'> & {
   channels: Channel[];
 };
 
-// Each supported channel gets its own task and result. Tasks run in this order.
+// Each supported channel gets its own independent task and result.
 export const validations: Validation[] = Object.entries({ spt, card }).flatMap(
   ([method, scenarios]) =>
     scenarios.flatMap(({ name, channels, ...scenario }) =>
