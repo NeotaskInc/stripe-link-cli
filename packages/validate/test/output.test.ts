@@ -62,15 +62,12 @@ it('scores a validation only after its verdict, never on payment progress', () =
   expect(output.text()).toContain('Passed 1/1 (100%)');
 });
 
-it('keeps every prompt word and URL intact when a terminal wraps the table', () => {
+it('prints copyable prompts outside the compact table even in a narrow terminal', () => {
   const output = capture(true, 44);
   output.print(ready());
-  for (const word of task.split(' ')) {
-    expect(output.text()).toContain(word);
-  }
-  expect(output.text()).toContain(
-    'https://127.0.0.1:4321/card-browser-purchase',
-  );
+  expect(output.text()).toContain(`\n${task}\n`);
+  expect(output.text()).toContain('Status      | Validation');
+  expect(output.text()).toContain('Pending     | card-browser-purchase');
 });
 
 it('uses plain output without cursor escapes when stdout is not a TTY', () => {
@@ -123,6 +120,7 @@ it('redraws a TTY table with the updated verdict score', () => {
   });
 
   expect(output.text().slice(readyOutput.length)).toContain('\u001b[');
+  expect(output.text().slice(readyOutput.length)).not.toContain(task);
   expect(output.text()).toContain('Passed 1/2 (50%)');
 });
 

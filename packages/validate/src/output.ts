@@ -34,7 +34,7 @@ const progressStatus: Record<string, string> = {
 const label = (value: string) =>
   value[0].toUpperCase() + value.slice(1).replaceAll('_', ' ');
 
-// Wrap at spaces so a copied prompt never contains a split URL.
+// Wrap table cells at spaces without splitting URLs.
 function wrap(text: string, width: number) {
   const lines: string[] = [];
   let line = '';
@@ -70,18 +70,12 @@ export function createPrinter(output: NodeJS.WriteStream = process.stdout) {
       : `${scoreLabel()}${timeout ? ` · ${limit} timeout` : ''}`;
     const lines = [
       ...wrap(heading, columns - 1),
-      ...(!result
-        ? wrap(
-            'Run prompts in any order. Approve spend requests when prompted.',
-            columns - 1,
-          )
-        : []),
       '',
-      'Status      | Prompt',
+      'Status      | Validation',
       `${'-'.repeat(12)}+-${'-'.repeat(width)}`,
     ];
     for (const row of rows.values()) {
-      const [first, ...rest] = wrap(row.task, width);
+      const [first, ...rest] = wrap(row.validation, width);
       lines.push(`${label(row.status).padEnd(11)} | ${first}`);
       for (const line of rest) lines.push(`            | ${line}`);
       if (row.detail) {
@@ -118,6 +112,10 @@ export function createPrinter(output: NodeJS.WriteStream = process.stdout) {
       }
       score = event.score;
       timeout = event.timeout_seconds ?? 0;
+      // Let the terminal soft-wrap prompts so copying preserves their text.
+      output.write(
+        `Run prompts in any order. Approve test-mode spend requests when prompted.\n\n${event.tasks.map(({ task }) => task).join('\n\n')}\n\n`,
+      );
       draw();
     } else if (event.event === 'result') {
       for (const verdict of event.validations) {
