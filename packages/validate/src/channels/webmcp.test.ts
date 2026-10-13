@@ -3,7 +3,11 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createValidationServer } from '../seller.ts';
 import { createSptAdapter } from '../spt.ts';
-import { cardWebmcpPurchase } from '../validations/card-webmcp-purchase.ts';
+import { validations } from '../validations/index.ts';
+
+const [cardWebmcpPurchase] = validations.filter(
+  (v) => v.id === 'card-webmcp-purchase',
+);
 
 const servers: Server[] = [];
 

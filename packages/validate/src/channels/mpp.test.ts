@@ -4,7 +4,9 @@ import { Challenge, Credential } from 'mppx';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createValidationServer } from '../seller.ts';
 import { createSptAdapter } from '../spt.ts';
-import { sptMppPurchase } from '../validations/spt-mpp-purchase.ts';
+import { validations } from '../validations/index.ts';
+
+const [sptMppPurchase] = validations.filter((v) => v.id === 'spt-mpp-purchase');
 
 const servers: Server[] = [];
 

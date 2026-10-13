@@ -2,8 +2,7 @@ import { expect, it, vi } from 'vitest';
 import type { LinkCli } from './link.ts';
 import { runValidation } from './run.ts';
 import { createSptAdapter } from './spt.ts';
-import { sptApiCancel } from './validations/spt-api-cancel.ts';
-import { sptApiPurchase } from './validations/spt-api-purchase.ts';
+import { validations } from './validations/index.ts';
 
 type Event = { event?: string; [key: string]: unknown };
 type Result = { id: string; status: string; [key: string]: unknown };
@@ -34,7 +33,7 @@ function run(timeoutMs: number, link: LinkCli) {
       events.push(event);
       if (event.event === 'ready') ready(event);
     },
-    validations: [sptApiPurchase, sptApiCancel],
+    validations: validations.filter((v) => v.channel === 'api'),
     link,
     pollMs: 10,
     graceMs: 30,

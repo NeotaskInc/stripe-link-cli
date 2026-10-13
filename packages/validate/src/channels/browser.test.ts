@@ -3,7 +3,11 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createValidationServer } from '../seller.ts';
 import { createSptAdapter } from '../spt.ts';
-import { cardBrowserPurchase } from '../validations/card-browser-purchase.ts';
+import { validations } from '../validations/index.ts';
+
+const [cardBrowserPurchase] = validations.filter(
+  (v) => v.id === 'card-browser-purchase',
+);
 
 const servers: Server[] = [];
 

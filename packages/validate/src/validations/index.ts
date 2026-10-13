@@ -1,11 +1,8 @@
 import type { Channel } from '../channels/index.ts';
 import type { LinkCli } from '../link.ts';
 import type { Observed } from '../seller.ts';
-import { cardBrowserPurchase } from './card-browser-purchase.ts';
-import { cardWebmcpPurchase } from './card-webmcp-purchase.ts';
-import { sptApiCancel } from './spt-api-cancel.ts';
-import { sptApiPurchase } from './spt-api-purchase.ts';
-import { sptMppPurchase } from './spt-mpp-purchase.ts';
+import { card } from './card.ts';
+import { spt } from './spt.ts';
 
 export type Verdict = {
   status: 'pending' | 'passed' | 'failed' | 'unverified';
@@ -31,12 +28,19 @@ export type Validation = {
   ) => Promise<Verdict>;
 };
 
-// Tasks run one at a time in this order. To add a validation, create a module
-// in this directory and list it here.
-export const validations: Validation[] = [
-  sptApiPurchase,
-  sptApiCancel,
-  cardWebmcpPurchase,
-  sptMppPurchase,
-  cardBrowserPurchase,
-];
+export type Scenario = Omit<Validation, 'id' | 'channel'> & {
+  name: string;
+  channels: Channel[];
+};
+
+// Each supported channel gets its own task and result. Tasks run in this order.
+export const validations: Validation[] = Object.entries({ spt, card }).flatMap(
+  ([method, scenarios]) =>
+    scenarios.flatMap(({ name, channels, ...scenario }) =>
+      channels.map((channel) => ({
+        ...scenario,
+        id: `${method}-${channel}-${name}`,
+        channel,
+      })),
+    ),
+);
