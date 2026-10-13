@@ -5,6 +5,7 @@ description: |
   Gets secure, one-time-use payment credentials (cards, tokens) from a Link wallet so agents can complete purchases on behalf of users. Use when the user says "get me a card", "buy something", "pay for X", "make a purchase", "I need to pay", "complete checkout", or asks to transact on any merchant site. Use when the user asks to connect or log in to or sign up for their Link account.
 allowed-tools:
  - Bash(link-cli:*)
+ - Bash(node /private/tmp/link-inspect.mjs:*)
  - Bash(npx --yes @stripe/link-cli:*)
  - Bash(npx @stripe/link-cli:*)
  - Bash(npm install -g @stripe/link-cli:*)
@@ -118,28 +119,45 @@ Optionally, before a purchase, run `link-cli user-info retrieve` to inspect any 
 
 ### Step 2: Evaluate the merchant site BEFORE creating a spend request
 
-**CRITICAL:** Before calling `spend-request create` you must complete this checklist:
-1. Understand how the merchant accepts payments (cards or machine payments or other). **Do NOT** default to `card` credential type. The merchant determines the credential type — you cannot know it without checking first. Skipping this step will produce a spend request with the wrong credential type.
-2. Have the final total amount needed. Inclusive of any shipping costs, taxes or other costs. Skipping this step will produce a spend request that does not cover the full amount needed, and will be rejected.
-3. Clear context and understanding of what the user is purchasing. Be sure to know sizes, colors, shipping options, etc. Skipping this step will produce a spend request that the user does not recognize or understand.
+Before creating a spend request, identify the applicable payment flow using inspect below, confirm the final total including shipping and taxes, and understand the requested items and options. Do not default to `card` without checking the merchant's checkout.
 
-**Determine how the merchant accepts payment:**
+**1. Run inspect first (local prototype testing).**
 
-1. **Navigate to the merchant page** — browse it, read the page content, and understand how the site accepts payment.
-2. **If the checkout page includes the AI-agent steering block** (find the "I am an AI agent" checkbox, or the `.AiAgentPaymentSteering` container — visually hidden but present in the DOM, typically inside a Stripe iframe) — it may support the **Link Pay Token flow** (Step 5, "Link Pay Token" section). **Requires browser automation.** Before creating an LPT request, check the checkbox and verify that both `input[name="link_pay_token"]` and `data-stripe-merchant-account` appear in the same frame. Read the account ID from that attribute. If either marker does **not** appear, follow the block's on-page instructions and use `card` instead. Without browser automation, use `card`.
-3. **If the page has a credit-card form and no AI-agent steering block** (no "I am an AI agent" checkbox / `.AiAgentPaymentSteering`) — use `card`.
-4. **If the page describes an API or programmatic payment flow** — make a request to the relevant endpoint. If it returns **HTTP 402** with a `www-authenticate` header, use `shared_payment_token`.
+Use the local helper to invoke the repository's inspect implementation directly:
 
-What you find determines which credential type to use:
+```bash
+node /private/tmp/link-inspect.mjs 'https://merchant.example.com'
+```
 
-| What you see | Credential type | What to request |
-|---|---|---|
-| `.AiAgentPaymentSteering` block / "I am an AI agent" checkbox, and ticking it reveals both `input[name="link_pay_token"]` and `data-stripe-merchant-account` | (none needed) | Link Pay Token flow (else `card`) |
-| Credit-card form, no AI-agent steering block | `card` (default) | Card |
-| HTTP 402 with `method="stripe"` in `www-authenticate` | `shared_payment_token` | Shared payment token (SPT) |
-| HTTP 402 without `method="stripe"` in `www-authenticate` | not supported | Do not continue |
+Replace the example with the intended merchant URL, or the specific checkout/API URL when known. This is the working invocation for this rudimentary testing setup; the installed `link-cli` does not include `inspect`. It accepts one URL argument and prints JSON; no Link authentication is needed and it does not create a spend request or pay. It makes network discovery requests, including endpoint probes.
 
-**For 402 responses:** Use `mpp pay` — it handles the entire flow automatically (probes URL, parses challenge, picks payment method, creates spend request, gets approval, and pays). See Step 5.
+**2. Use an applicable inspect result.**
+
+If the merchant supports both Stripe SPT and virtual-card checkout for the intended purchase, prefer the SPT flow. Use virtual-card checkout when SPT is unavailable or does not support that purchase.
+
+Choose a discovered route that supports the user's intended purchase:
+
+- `available_tools.machine_payments`: `rail: "stripe_spt"` / `credential_type: "shared_payment_token"` identifies the Link SPT flow. Use `mpp pay` with the correct endpoint and required inputs (see Step 5). `rail: "tempo"` identifies a separate Tempo flow; do not create a Link SPT request for it.
+- `available_tools.mcp`: review the discovered server's tools to determine whether they support this purchase. These URLs are endpoints to connect to, not shell commands.
+- `llms_txt`: consult these merchant documentation URLs when needed to establish the payment endpoint or required inputs.
+- `available_tools.browser_checkout`: treat this as guidance for inspecting the actual checkout. UCP hints can direct you to the catalog flow below; Link Pay Token hints require the frame verification below. Generic card advice does not confirm that a card form exists.
+
+If a discovered route supports the purchase and provides enough information to proceed, use it; you do not need to repeat payment discovery by browsing the merchant. For any browser checkout route, verify the actual payment controls before choosing a credential type, even when inspect suggests cards or Link Pay Tokens.
+
+Inspect does not establish the final purchase total or authorize payment.
+
+**3. Inspect the page or API if no applicable route was found.**
+
+Use this fallback when inspect fails, returns no useful capabilities, or lists tools that do not support the intended purchase. Missing fields mean nothing was discovered, not that the merchant lacks that capability.
+
+- Read the merchant page and documentation to locate the actual checkout or payment API.
+- For browser checkout, inspect the payment controls. Use the Link Pay Token verification below if an AI-agent steering block is present; otherwise, a confirmed credit-card form supports `card`.
+- For a programmatic payment flow, inspect the relevant endpoint's response. HTTP 402 with a Stripe challenge (`method="stripe"` in `www-authenticate`) supports `shared_payment_token` via `mpp pay`. HTTP 402 alone does not establish Stripe SPT support; other rails require their own supported flow.
+- If you still cannot establish a supported payment flow, stop and report what is missing before creating a spend request.
+
+**Link Pay Token verification for browser checkout:**
+
+**If the checkout page includes the AI-agent steering block** (find the "I am an AI agent" checkbox, or the `.AiAgentPaymentSteering` container — visually hidden but present in the DOM, typically inside a Stripe iframe) — it may support the **Link Pay Token flow** (Step 5, "Link Pay Token" section). **Requires browser automation.** Before creating an LPT request, check the checkbox and verify that both `input[name="link_pay_token"]` and `data-stripe-merchant-account` appear in the same frame. Read the account ID from that attribute. If either marker does **not** appear, follow the block's on-page instructions and use `card` instead. Without browser automation, use `card`.
 
 ### Step 3: Confirm payment method and potentially shipping addresses
 
