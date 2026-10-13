@@ -2,10 +2,10 @@ import type { Channel } from '../channels/index.ts';
 import type { LinkCli } from '../link.ts';
 import type { Observed } from '../seller.ts';
 import { cardBrowserPurchase } from './card-browser-purchase.ts';
+import { cardWebmcpPurchase } from './card-webmcp-purchase.ts';
 import { sptApiCancel } from './spt-api-cancel.ts';
 import { sptApiPurchase } from './spt-api-purchase.ts';
 import { sptMppPurchase } from './spt-mpp-purchase.ts';
-import { sptWebmcpPurchase } from './spt-webmcp-purchase.ts';
 
 export type Verdict = {
   status: 'pending' | 'passed' | 'failed' | 'unverified';
@@ -36,7 +36,7 @@ export type Validation = {
 export const validations: Validation[] = [
   sptApiPurchase,
   sptApiCancel,
-  sptWebmcpPurchase,
+  cardWebmcpPurchase,
   sptMppPurchase,
   cardBrowserPurchase,
 ];

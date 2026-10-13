@@ -15,7 +15,7 @@ const addressFields = [
 const field = (id: string, label: string, autocomplete: string) =>
   `<label>${label} <input name="${id}" autocomplete="${autocomplete}"${id === 'line_2' ? '' : ' required'}></label>`;
 
-function checkoutPage(context: ChannelContext) {
+export function checkoutPage(context: ChannelContext, script = '') {
   return (
     `<!doctype html><html lang="en"><meta charset="utf-8"><title>Trail Notes checkout</title>` +
     `<h1>Trail Notes</h1><p>${productLine(context)}</p>` +
@@ -30,11 +30,11 @@ function checkoutPage(context: ChannelContext) {
     field('administrative_area', 'State', 'address-level1') +
     field('postal_code', 'Postal code', 'postal-code') +
     field('country_code', 'Country code', 'country') +
-    `<button type="submit">Place order</button></form></html>`
+    `<button type="submit">Place order</button></form>${script}</html>`
   );
 }
 
-async function purchase(context: ChannelContext) {
+export async function purchase(context: ChannelContext) {
   const { request, run, report, reply, fail, send } = context;
   const { observed } = run;
   if (observed.confirmed) {

@@ -3,22 +3,15 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createValidationServer } from '../seller.ts';
 import { createSptAdapter } from '../spt.ts';
-import { sptWebmcpPurchase } from '../validations/spt-webmcp-purchase.ts';
+import { cardWebmcpPurchase } from '../validations/card-webmcp-purchase.ts';
 
-const paid = {
-  id: 'pi_test',
-  status: 'succeeded',
-  livemode: false,
-  amount: 100,
-  currency: 'usd',
-};
 const servers: Server[] = [];
 
-async function start(stripeResponse: unknown) {
-  const stripe = vi.fn<typeof fetch>(async () => Response.json(stripeResponse));
+async function start() {
+  const stripe = vi.fn<typeof fetch>();
   const run = createValidationServer(
     createSptAdapter('sk_test_seller', stripe),
-    [sptWebmcpPurchase],
+    [cardWebmcpPurchase],
     () => {},
   );
   servers.push(run.server);
@@ -26,15 +19,32 @@ async function start(stripeResponse: unknown) {
     run.server.listen(0, '127.0.0.1', resolve),
   );
   const { port } = run.server.address() as AddressInfo;
-  const url = `http://127.0.0.1:${port}`;
-  return { ...run, stripe, url, base: `${url}/spt-webmcp-purchase` };
+  return {
+    ...run,
+    stripe,
+    url: `http://127.0.0.1:${port}/card-webmcp-purchase`,
+  };
 }
 
-const post = (url: string, body: unknown, headers = {}) =>
-  fetch(url, {
+const address = {
+  line_1: '123 Main St',
+  locality: 'Springfield',
+  administrative_area: 'IL',
+  postal_code: '62701',
+  country_code: 'US',
+};
+const validForm = {
+  name: 'Jamie Rivers',
+  card_number: '4242 4242 4242 4242',
+  expiry: '12/39',
+  cvc: '123',
+  ...address,
+};
+const post = (url: string, form: Record<string, string>, headers = {}) =>
+  fetch(`${url}/purchase`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...headers },
-    body: JSON.stringify(body),
+    headers,
+    body: new URLSearchParams(form),
   });
 
 afterEach(async () => {
@@ -44,27 +54,40 @@ afterEach(async () => {
   }
 });
 
-it('serves a store page with a WebMCP purchase tool, and only pays through it', async () => {
-  const run = await start(paid);
-  const html = await fetch(run.base).then((r) => r.text());
-  expect(html).toContain('registerTool');
-  expect(html).toContain("name: 'purchase'");
-  expect(run.observe('spt-webmcp-purchase').api_viewed).toBe(true);
+it('requires the WebMCP checkout form submission', async () => {
+  const run = await start();
+  const html = await fetch(run.url).then((r) => r.text());
+  expect(html).toContain('cc-number');
+  expect(run.observe('card-webmcp-purchase').api_viewed).toBe(true);
 
-  const unauthorized = await post(`${run.base}/purchase`, {
-    spt: 'spt_test_buyer',
-  });
-  expect(unauthorized.status).toBe(400);
+  const response = await post(run.url, validForm);
+  expect(response.status).toBe(400);
+  expect(run.observe('card-webmcp-purchase').confirmed).toBe(false);
   expect(run.stripe).not.toHaveBeenCalled();
+});
 
-  const receipt = await post(
-    `${run.base}/purchase`,
-    { spt: 'spt_test_buyer' },
-    { 'X-WebMCP-Tool': 'purchase' },
-  ).then((r) => r.json());
-  expect(receipt).toMatchObject({ payment_intent: paid.id });
-  expect(run.stripe).toHaveBeenCalledTimes(1);
-  expect(run.observe('spt-webmcp-purchase').payment).toMatchObject({
-    payment_intent: paid.id,
+it('completes card checkout without charging and checks the shipping address', async () => {
+  const run = await start();
+  const response = await post(run.url, validForm, {
+    'X-WebMCP-Tool': 'purchase',
   });
+  expect(response.status).toBe(200);
+  expect(await response.text()).not.toContain(validForm.card_number);
+  const observed = run.observe('card-webmcp-purchase');
+  expect(observed).toMatchObject({
+    confirmed: true,
+    payment: { card_last4: '4242' },
+    shipping_address: address,
+  });
+  expect(JSON.stringify(observed)).not.toContain(validForm.card_number);
+  const link = vi.fn(async () => [{ is_default: true, address }]);
+  expect(
+    await cardWebmcpPurchase.evaluate({ observed, link, since: 0 }, false),
+  ).toMatchObject({
+    status: 'passed',
+    shipping: 'passed',
+    card_last4: '4242',
+  });
+  expect(link).toHaveBeenCalledWith(['shipping-address', 'list']);
+  expect(run.stripe).not.toHaveBeenCalled();
 });
