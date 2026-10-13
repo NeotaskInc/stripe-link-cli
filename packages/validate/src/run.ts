@@ -21,7 +21,6 @@ export async function runValidation(options: {
   timeoutMs: number;
   signal: AbortSignal;
   write: (event: Record<string, unknown>) => void;
-  log: (line: string) => void;
   validations?: Validation[];
   link?: LinkCli;
   pollMs?: number;
@@ -29,7 +28,7 @@ export async function runValidation(options: {
   // previous one finished is evaluated as final.
   graceMs?: number;
 }): Promise<number> {
-  const { adapter, timeoutMs, signal, write, log } = options;
+  const { adapter, timeoutMs, signal, write } = options;
   const validations = options.validations ?? defaultValidations;
   const link = options.link ?? linkCli;
   const graceMs = options.graceMs ?? 300_000;
@@ -51,9 +50,13 @@ export async function runValidation(options: {
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     const tasks = validations.map((validation) => {
       const url = `${base}/${validation.id}`;
-      return { validation: validation.id, url, task: validation.task(url) };
+      return {
+        validation: validation.id,
+        channel: validation.channel,
+        url,
+        task: validation.task(url),
+      };
     });
-    log(`${tasks.map((t) => t.task).join('\n')}\nWaiting for the agent.`);
     write({
       event: 'ready',
       run_id: runId,
@@ -121,7 +124,6 @@ export async function runValidation(options: {
             ? 'timed_out'
             : 'passed';
     write({ event: 'result', status, run_id: runId, validations: results });
-    log(`Validation ${status.replace('_', ' ')}.`);
     return exitCodes[status];
   } finally {
     done = true;

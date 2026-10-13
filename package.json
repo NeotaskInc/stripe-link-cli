@@ -30,6 +30,7 @@
     },
     "onlyBuiltDependencies": [
       "@biomejs/biome",
+      "@stripe/cli",
       "esbuild"
     ]
   },

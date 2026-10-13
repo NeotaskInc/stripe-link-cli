@@ -2,6 +2,8 @@ import { expect, it, vi } from 'vitest';
 import type { LinkCli } from './link.ts';
 import { runValidation } from './run.ts';
 import { createSptAdapter } from './spt.ts';
+import { sptApiCancel } from './validations/spt-api-cancel.ts';
+import { sptApiPurchase } from './validations/spt-api-purchase.ts';
 
 type Event = { event?: string; [key: string]: unknown };
 type Result = { id: string; status: string; [key: string]: unknown };
@@ -32,7 +34,7 @@ function run(timeoutMs: number, link: LinkCli) {
       events.push(event);
       if (event.event === 'ready') ready(event);
     },
-    log: () => {},
+    validations: [sptApiPurchase, sptApiCancel],
     link,
     pollMs: 10,
     graceMs: 30,
@@ -92,8 +94,8 @@ it('passes when the buyer ships to the default address and cancels', async () =>
   request.status = 'canceled';
   expect(await validation.exit).toBe(0);
   expect(validation.results()).toMatchObject({
-    'spt-purchase': { status: 'passed', shipping: 'passed' },
-    'spt-cancel': { status: 'passed' },
+    'spt-api-purchase': { status: 'passed', shipping: 'passed' },
+    'spt-api-cancel': { status: 'passed' },
   });
 });
 
@@ -104,7 +106,7 @@ it('fails when the buyer ships elsewhere', async () => {
     country_code: 'US',
   });
   expect(await validation.exit).toBe(2);
-  expect(validation.results()['spt-purchase']).toMatchObject({
+  expect(validation.results()['spt-api-purchase']).toMatchObject({
     status: 'failed',
     shipping: 'failed',
   });
@@ -114,7 +116,7 @@ it('marks a validation unverified after the grace period', async () => {
   const validation = run(0, link([]));
   await buy(await validation.readyEvent);
   expect(await validation.exit).toBe(0);
-  expect(validation.results()['spt-cancel']).toMatchObject({
+  expect(validation.results()['spt-api-cancel']).toMatchObject({
     status: 'unverified',
   });
 });
@@ -123,7 +125,7 @@ it('times out a validation that never finishes', async () => {
   const validation = run(20, async () => undefined);
   expect(await validation.exit).toBe(3);
   expect(validation.results()).toMatchObject({
-    'spt-purchase': { status: 'timed_out' },
-    'spt-cancel': { status: 'unverified' },
+    'spt-api-purchase': { status: 'timed_out' },
+    'spt-api-cancel': { status: 'unverified' },
   });
 });

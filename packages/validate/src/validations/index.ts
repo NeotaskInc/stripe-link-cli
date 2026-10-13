@@ -1,7 +1,11 @@
+import type { Channel } from '../channels/index.ts';
 import type { LinkCli } from '../link.ts';
 import type { Observed } from '../seller.ts';
-import { sptCancel } from './spt-cancel.ts';
-import { sptPurchase } from './spt-purchase.ts';
+import { cardBrowserPurchase } from './card-browser-purchase.ts';
+import { sptApiCancel } from './spt-api-cancel.ts';
+import { sptApiPurchase } from './spt-api-purchase.ts';
+import { sptMppPurchase } from './spt-mpp-purchase.ts';
+import { sptWebmcpPurchase } from './spt-webmcp-purchase.ts';
 
 export type Verdict = {
   status: 'pending' | 'passed' | 'failed' | 'unverified';
@@ -11,8 +15,10 @@ export type Verdict = {
 };
 
 export type Validation = {
-  // URL path segment and result id.
+  // URL path segment and result id: <payment method>-<channel>-<scenario>.
   id: string;
+  // How the agent reaches the seller.
+  channel: Channel;
   product: { name: string; amount: number; ships: boolean };
   // When set, the seller refuses payment with this message instead of charging.
   rejection?: string;
@@ -27,4 +33,10 @@ export type Validation = {
 
 // Tasks run one at a time in this order. To add a validation, create a module
 // in this directory and list it here.
-export const validations: Validation[] = [sptPurchase, sptCancel];
+export const validations: Validation[] = [
+  sptApiPurchase,
+  sptApiCancel,
+  sptWebmcpPurchase,
+  sptMppPurchase,
+  cardBrowserPurchase,
+];

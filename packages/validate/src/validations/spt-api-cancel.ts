@@ -3,8 +3,9 @@ import { sptNetworkId } from '../spt.ts';
 import type { Validation } from './index.ts';
 
 const product = { name: 'Field guide', amount: 200, ships: false };
-export const sptCancel: Validation = {
-  id: 'spt-cancel',
+export const sptApiCancel: Validation = {
+  id: 'spt-api-cancel',
+  channel: 'api',
   // The price identifies this validation's spend request in Link.
   product,
   // The purchase is refused, so the spend request should be canceled.

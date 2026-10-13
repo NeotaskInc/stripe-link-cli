@@ -16,6 +16,7 @@ export function createSptAdapter(
   }
 
   return {
+    secretKey,
     documentation: {
       currency,
       test_mode: true,

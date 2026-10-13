@@ -49,6 +49,7 @@ node packages/cli/dist/cli.js <command>
 
 - `pnpm validate` starts a local test seller (`packages/validate`) and runs buyer-agent validations, reading Link data through `link-cli`. It is repo tooling, not part of the published CLI. Keep `packages/validate/README.md`, the guide for coding agents, aligned with its behavior.
 - To add a validation, add a module in `packages/validate/src/validations/` and list it in `validations/index.ts`. The seller and runner are generic; keep validation-specific details in the module, and don't enumerate validations in docs or comments.
+- Each validation names a channel. To add a channel, add a handler in `packages/validate/src/channels/` and list it in `channels/index.ts`.
 - Claimable sandbox keys (`rkcs_`) are rejected because they can't accept SPTs.
 - Never echo seller keys or SPTs in output or errors.
 

@@ -28,7 +28,7 @@ async function start(stripeResponse: unknown) {
   );
   const { port } = run.server.address() as AddressInfo;
   const url = `http://127.0.0.1:${port}`;
-  return { ...run, stripe, url, purchase: `${url}/spt-purchase` };
+  return { ...run, stripe, url, purchase: `${url}/spt-api-purchase` };
 }
 
 const post = (url: string, body: unknown, headers = {}) =>
@@ -60,7 +60,7 @@ it('confirms a verified payment', async () => {
 
   const [, init] = run.stripe.mock.calls[0];
   expect(init?.headers).toMatchObject({
-    'Idempotency-Key': `link_validate_${run.runId}_spt-purchase`,
+    'Idempotency-Key': `link_validate_${run.runId}_spt-api-purchase`,
   });
   expect(Object.fromEntries(init?.body as URLSearchParams)).toMatchObject({
     amount: '100',
@@ -75,7 +75,7 @@ it('confirms a verified payment', async () => {
   await post(`${run.purchase}/confirm`, {
     confirmation_token: receipt.confirmation_token,
   });
-  expect(run.observe('spt-purchase')).toMatchObject({
+  expect(run.observe('spt-api-purchase')).toMatchObject({
     confirmed: true,
     payment: { payment_intent: paid.id },
     shipping_address,
@@ -91,7 +91,7 @@ it('ends the validation on a rejected payment without echoing secrets', async ()
   expect(response.status).toBe(422);
   const text = await response.text();
   expect(text).not.toMatch(/sk_test_seller|spt_test_buyer|confirmation_token/);
-  expect(run.observe('spt-purchase').terminal_error).toBeDefined();
+  expect(run.observe('spt-api-purchase').terminal_error).toBeDefined();
   expect((await post(`${run.purchase}/purchase`, body)).status).toBe(409);
   expect(run.stripe).toHaveBeenCalledTimes(1);
 });
@@ -101,10 +101,12 @@ it('requires shipping where the product ships and refuses out-of-stock products'
   expect(
     (await post(`${run.purchase}/purchase`, { spt: 'spt_test_buyer' })).status,
   ).toBe(400);
-  expect((await post(`${run.url}/spt-cancel/purchase`, {})).status).toBe(409);
-  expect(run.observe('spt-cancel').purchase_attempted).toBe(true);
+  expect((await post(`${run.url}/spt-api-cancel/purchase`, {})).status).toBe(
+    409,
+  );
+  expect(run.observe('spt-api-cancel').purchase_attempted).toBe(true);
   expect(
-    await fetch(`${run.url}/spt-cancel/api`).then((r) => r.json()),
+    await fetch(`${run.url}/spt-api-cancel/api`).then((r) => r.json()),
   ).not.toHaveProperty('confirmation');
   expect(run.stripe).not.toHaveBeenCalled();
 });

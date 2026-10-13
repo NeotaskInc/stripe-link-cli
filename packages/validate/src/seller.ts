@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { createServer, type IncomingMessage } from 'node:http';
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { z } from 'zod';
+import { channels } from './channels/index.ts';
 import type { Address } from './link.ts';
 import type { Validation } from './validations/index.ts';
 
@@ -12,6 +16,7 @@ export type PaymentAdapter = {
   documentation: Record<string, unknown> & {
     credential: Record<string, string>;
   };
+  secretKey: string;
   // Return payment evidence only after verifying the completed test payment.
   // A terminal error means this validation can no longer pass.
   purchase(
@@ -48,15 +53,32 @@ export type Observed = {
   terminal_error?: string;
 };
 
-// A record of strings, bounded by the 8 KiB request limit below.
-const shippingBody = z.object({
-  shipping_address: z
-    .record(z.string(), z.string().max(200))
-    .refine((address) => !!address.line_1, 'shipping_address requires line_1'),
-});
-const confirmationBody = z.object({ confirmation_token: z.string() });
+// Per-validation run state shared by the seller and its channel handlers.
+export type Run = {
+  validation: Validation;
+  purchasing: boolean;
+  confirmationToken?: string;
+  observed: Observed;
+};
 
-async function readJson(request: IncomingMessage): Promise<unknown> {
+// Everything a channel handler needs to answer one request.
+export type ChannelContext = {
+  request: IncomingMessage;
+  response: ServerResponse;
+  // Path after the validation's base path, e.g. "/", "/api", "/purchase".
+  page: string;
+  base: string;
+  run: Run;
+  runId: string;
+  adapter: PaymentAdapter;
+  report: (progress: Omit<Progress, 'validation'>) => void;
+  send: (status: number, contentType: string, body: string) => void;
+  reply: (status: number, body: unknown) => void;
+  // Records the error for the validation and replies with it.
+  fail: (status: number, message: string) => void;
+};
+
+export async function readBody(request: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
@@ -64,7 +86,7 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
     if (size > 8192) throw new Error('Request too large');
     chunks.push(chunk);
   }
-  return JSON.parse(Buffer.concat(chunks).toString());
+  return Buffer.concat(chunks).toString();
 }
 
 export function createValidationServer(
@@ -73,18 +95,17 @@ export function createValidationServer(
   report: (progress: Progress) => void,
 ) {
   const runId = randomUUID();
-  const runs = new Map(
+  const runs = new Map<string, Run>(
     validations.map((validation) => [
       validation.id,
       {
         validation,
         purchasing: false,
-        confirmationToken: undefined as string | undefined,
         observed: {
           api_viewed: false,
           purchase_attempted: false,
           confirmed: false,
-        } as Observed,
+        },
       },
     ]),
   );
@@ -124,154 +145,34 @@ export function createValidationServer(
       reply(404, { error: 'Not found. Use the URL from your task.' });
       return;
     }
-    const { validation, observed } = run;
-    const { product } = validation;
-    const base = `/${validation.id}`;
-
-    if (request.method === 'GET' && page === '/') {
-      send(
-        200,
-        'text/html; charset=utf-8',
-        `<!doctype html><html lang="en"><meta charset="utf-8"><title>Trail Notes</title><h1>Trail Notes</h1>` +
-          `<p>${product.name}, $${(product.amount / 100).toFixed(2)} USD${product.ships ? ', shipped' : ''}.</p>` +
-          `<p><a href="${base}/api">Purchase API documentation</a></p></html>`,
-      );
-      return;
-    }
-    if (request.method === 'GET' && page === '/api') {
-      observed.api_viewed = true;
-      report({ validation: validation.id, step: 'api_viewed' });
-      const { credential, ...meta } = adapter.documentation;
-      reply(200, {
-        product,
-        ...meta,
-        purchase: {
-          method: 'POST',
-          path: `${base}/purchase`,
-          content_type: 'application/json',
-          body: {
-            ...credential,
-            ...(product.ships && {
-              shipping_address:
-                '<name, line_1, line_2, locality, administrative_area, postal_code, country_code>',
-            }),
-          },
-        },
-        ...(!validation.rejection && {
-          confirmation: {
-            method: 'POST',
-            path: `${base}/confirm`,
-            body: { confirmation_token: '<token returned by the purchase>' },
-          },
-        }),
-      });
-      return;
-    }
-    if (
-      request.method !== 'POST' ||
-      (page !== '/purchase' && page !== '/confirm')
-    ) {
-      reply(404, { error: 'Not found' });
-      return;
-    }
-    const fail = (status: number, message: string) => {
-      if (!observed.confirmed) {
-        observed.error = message;
-        report({
-          validation: validation.id,
-          step:
-            page === '/purchase'
-              ? 'purchase_rejected'
-              : 'confirmation_rejected',
-          error: message,
-        });
-      }
-      reply(status, { error: message });
-    };
-    if (validation.rejection) {
-      observed.purchase_attempted = true;
-      fail(409, validation.rejection);
-      return;
-    }
-
-    let body: unknown;
-    try {
-      body = await readJson(request);
-    } catch {
-      fail(400, 'Send a JSON body no larger than 8 KiB.');
-      return;
-    }
-
-    if (page === '/confirm') {
-      const parsed = confirmationBody.safeParse(body);
-      if (
-        !run.confirmationToken ||
-        !parsed.success ||
-        parsed.data.confirmation_token !== run.confirmationToken
-      ) {
-        fail(400, 'A confirmation token from this purchase is required.');
-        return;
-      }
-      const result = { ...observed.payment, status: 'passed', run_id: runId };
-      response.once('finish', () => {
-        observed.confirmed = true;
-        observed.error = undefined;
-        report({ validation: validation.id, step: 'confirmed' });
-      });
-      reply(200, result);
-      return;
-    }
-
-    const shipping = shippingBody.safeParse(body);
-    if (product.ships && !shipping.success) {
-      fail(400, `${product.name} ships. Include a shipping_address.`);
-      return;
-    }
-    if (observed.terminal_error || run.purchasing || observed.payment) {
-      reply(409, {
-        error:
-          'This validation already has a purchase. If it failed, start a new validation run.',
-      });
-      return;
-    }
-    if (shipping.success) {
-      observed.shipping_address = shipping.data.shipping_address as Address;
-    }
-    run.purchasing = true;
-    observed.error = undefined;
-    report({ validation: validation.id, step: 'purchase_submitted' });
-    const failValidation = (status: number, message: string) => {
-      observed.terminal_error = message;
-      fail(status, message);
-    };
-    try {
-      const result = await adapter.purchase(body, {
-        amount: product.amount,
-        runId,
-        idempotencyKey: `link_validate_${runId}_${validation.id}`,
-      });
-      if ('error' in result) {
-        if (result.terminal) failValidation(result.status, result.error);
-        else fail(result.status, result.error);
-        return;
-      }
-      observed.payment = result.payment;
-      run.confirmationToken = randomUUID();
-      report({ validation: validation.id, step: 'payment_verified' });
-      reply(200, {
-        ...result.payment,
-        confirmation_token: run.confirmationToken,
-        product: product.name,
-      });
-    } catch {
-      // Never echo adapter errors: they can contain payment credentials.
-      failValidation(
-        502,
-        'Unable to verify the test payment. Check the seller request logs, then start a new validation run.',
-      );
-    } finally {
-      run.purchasing = false;
-    }
+    const validation = run.validation.id;
+    const progress = (event: Omit<Progress, 'validation'>) =>
+      report({ validation, ...event });
+    await channels[run.validation.channel]({
+      request,
+      response,
+      page,
+      base: `/${validation}`,
+      run,
+      runId,
+      adapter,
+      report: progress,
+      send,
+      reply,
+      fail: (status, message) => {
+        if (!run.observed.confirmed) {
+          run.observed.error = message;
+          progress({
+            step:
+              page === '/confirm'
+                ? 'confirmation_rejected'
+                : 'purchase_rejected',
+            error: message,
+          });
+        }
+        reply(status, { error: message });
+      },
+    });
   });
 
   const observe = (id: string): Observed => {

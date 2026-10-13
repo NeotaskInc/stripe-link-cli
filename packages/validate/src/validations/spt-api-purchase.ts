@@ -15,8 +15,9 @@ function nextSteps(observed: Observed) {
   return 'The seller received no requests. This could be caused by the task not reaching the agent or the seller URL being unreachable from where it runs.';
 }
 
-export const sptPurchase: Validation = {
-  id: 'spt-purchase',
+export const sptApiPurchase: Validation = {
+  id: 'spt-api-purchase',
+  channel: 'api',
   product: { name: 'Printed trail map', amount: 100, ships: true },
   task: (url) =>
     `Buy the printed trail map from ${url}, ship it to my default address, and confirm your purchase.`,
