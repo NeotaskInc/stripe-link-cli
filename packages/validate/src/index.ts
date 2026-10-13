@@ -18,16 +18,21 @@ Exit codes: 0 passed, 1 setup error, 2 failed, 3 timed out, 130 interrupted.`;
 
 type Event = Record<string, unknown> & { event: string };
 type Task = { task: string };
-type Result = { id: string; status: string; next_steps?: string };
+type Result = {
+  id: string;
+  status: string;
+  error?: string;
+  next_steps?: string;
+};
 
 function print(event: Record<string, unknown>) {
   const e = event as Event;
   if (e.event === 'ready') {
     const seconds = Number(e.timeout_seconds);
     const limit =
-      seconds >= 60
-        ? `${seconds / 60} minutes`
-        : `${seconds} second${seconds === 1 ? '' : 's'}`;
+      seconds % 60
+        ? `${seconds} second${seconds === 1 ? '' : 's'}`
+        : `${seconds / 60} minute${seconds === 60 ? '' : 's'}`;
     console.log(`Validating${seconds ? ` (times out in ${limit})` : ''}.`);
     console.log('\nGive each task to your agent, one at a time in order:');
     for (const [i, { task }] of (e.tasks as Task[]).entries()) {
@@ -40,10 +45,9 @@ function print(event: Record<string, unknown>) {
     console.log(`${e.validation}: ${e.step}${e.error ? ` (${e.error})` : ''}`);
   } else if (e.event === 'result') {
     console.log(`\nResult: ${e.status}`);
-    for (const { id, status, next_steps } of e.validations as Result[]) {
-      console.log(
-        `  ${id}: ${status}${next_steps ? `\n    ${next_steps}` : ''}`,
-      );
+    for (const { id, status, error, next_steps } of e.validations as Result[]) {
+      const detail = next_steps ?? error;
+      console.log(`  ${id}: ${status}${detail ? `\n    ${detail}` : ''}`);
     }
   }
 }

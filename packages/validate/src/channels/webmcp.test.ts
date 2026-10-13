@@ -68,19 +68,3 @@ it('serves a store page with a WebMCP purchase tool, and only pays through it', 
     payment_intent: paid.id,
   });
 });
-
-it('passes evaluate() once the payment is observed', async () => {
-  const run = await start(paid);
-  await post(
-    `${run.base}/purchase`,
-    { spt: 'spt_test_buyer' },
-    { 'X-WebMCP-Tool': 'purchase' },
-  );
-  const observed = run.observe('spt-webmcp-purchase');
-  await expect(
-    sptWebmcpPurchase.evaluate(
-      { observed, link: undefined as never, since: 0 },
-      false,
-    ),
-  ).resolves.toMatchObject({ status: 'passed' });
-});

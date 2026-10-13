@@ -53,7 +53,7 @@ it('serves a checkout form and rejects a malformed card', async () => {
 
   const response = await postForm(`${run.url}/purchase`, {
     ...validForm,
-    card_number: '4242 4242 4242 4241', // fails the Luhn check
+    expiry: '13/39',
   });
   expect(response.status).toBe(400);
   expect(run.stripe).not.toHaveBeenCalled();

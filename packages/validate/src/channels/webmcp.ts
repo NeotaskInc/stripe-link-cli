@@ -1,10 +1,8 @@
 import type { ChannelContext } from '../seller.ts';
 import { productLine, purchase, readJson } from './api.ts';
 
-// WebMCP: the store page registers a page-provided "purchase" tool via
-// document.modelContext.registerTool(). Browser automation discovers and
-// invokes the tool directly (no visible UI interaction); the tool's
-// execute() posts to this seller's purchase route on the agent's behalf.
+// The store page registers a WebMCP "purchase" tool; its execute() posts to
+// /purchase with a header the seller requires.
 export async function webmcp(context: ChannelContext) {
   const { request, page, base, run, adapter, report, send, fail } = context;
   const { observed, validation } = run;
@@ -35,7 +33,6 @@ document.modelContext?.registerTool({
     },
     required: ['spt'],
   },
-  annotations: { consequentialHint: true },
   execute: async ({ spt }) => {
     const response = await fetch(${JSON.stringify(purchaseUrl)}, {
       method: 'POST',
