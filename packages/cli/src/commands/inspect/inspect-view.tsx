@@ -23,6 +23,12 @@ function ToolList({ label, tools }: { label: string; tools: InspectTool[] }) {
         >
           <Text color="green">{tool.command}</Text>
           <Text dimColor>{tool.description}</Text>
+          {tool.evidence ? (
+            <Text dimColor>
+              {tool.evidence === 'live_challenge' ? 'Live challenge' : 'OpenAPI'}:
+              {' '}{tool.source_url}
+            </Text>
+          ) : null}
           {tool.url ? <Text dimColor>{tool.url}</Text> : null}
         </Box>
       ))}
@@ -85,6 +91,27 @@ export const InspectView: React.FC<InspectViewProps> = ({
       <Box flexDirection="column" marginTop={1}>
         {tools?.machine_payments ? (
           <ToolList label="Machine payments" tools={tools.machine_payments} />
+        ) : null}
+        {tools?.payment_flows ? (
+          <Box flexDirection="column" marginBottom={1}>
+            <Text bold>Documented payment flows</Text>
+            {tools.payment_flows.map((flow) => (
+              <Box
+                key={`${flow.source_url}:${flow.rail}:${flow.purpose ?? 'general'}`}
+                flexDirection="column"
+                paddingLeft={2}
+              >
+                <Text>
+                  {flow.rail === 'stripe_spt' ? 'Stripe SPT' : 'Tempo'}
+                  {flow.purpose === 'purchase' ? ' (purchase)' : ''}
+                  {flow.purpose === 'account_funding' ? ' (account credit)' : ''}
+                  {flow.requires_setup ? ' — payment URL requires setup' : ''}
+                </Text>
+                <Text>{flow.description}</Text>
+                <Text dimColor>{flow.source_url}</Text>
+              </Box>
+            ))}
+          </Box>
         ) : null}
         {tools?.mcp ? <ToolList label="MCP" tools={tools.mcp} /> : null}
         {tools?.provisioning ? (

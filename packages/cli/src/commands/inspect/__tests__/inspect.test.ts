@@ -247,6 +247,8 @@ describe('runInspect', () => {
         command: "link-cli mpp pay 'https://shop.example.com/api/thing'",
         description: `Fetch a thing ${STRIPE_SPT_GUIDANCE}`,
         url: 'https://shop.example.com/api/thing',
+        evidence: 'openapi',
+        source_url: 'https://shop.example.com/api/openapi.json',
         method: 'stripe',
         rail: 'stripe_spt',
         credential_type: 'shared_payment_token',
@@ -255,6 +257,8 @@ describe('runInspect', () => {
         command: "tempo request 'https://shop.example.com/api/thing'",
         description: 'Fetch a thing',
         url: 'https://shop.example.com/api/thing',
+        evidence: 'openapi',
+        source_url: 'https://shop.example.com/api/openapi.json',
         method: 'tempo',
         rail: 'tempo',
       },
@@ -300,6 +304,8 @@ describe('runInspect', () => {
         command: "tempo request 'https://shop.example.com/api/thing'",
         description: 'Fetch a thing',
         url: 'https://shop.example.com/api/thing',
+        evidence: 'openapi',
+        source_url: 'https://shop.example.com/api/openapi.json',
         method: 'tempo',
         rail: 'tempo',
       },
@@ -344,6 +350,8 @@ describe('runInspect', () => {
       method: 'stripe',
       rail: 'stripe_spt',
       credential_type: 'shared_payment_token',
+      evidence: 'live_challenge',
+      source_url: 'https://climate.stripe.dev/api/contribute',
     });
     expect(result.available_tools).not.toHaveProperty('browser_checkout');
   });
@@ -869,6 +877,8 @@ describe('inspect fake merchant', () => {
             command: `link-cli mpp pay '${HEADLESS_ORIGIN}/api/orders' --method POST`,
             description: `Pay with MPP to create an order ${STRIPE_SPT_GUIDANCE}`,
             url: `${HEADLESS_ORIGIN}/api/orders`,
+            evidence: 'openapi',
+            source_url: `${HEADLESS_ORIGIN}/api/openapi.json`,
             method: 'stripe',
             rail: 'stripe_spt',
             credential_type: 'shared_payment_token',
@@ -895,7 +905,7 @@ describe('inspect fake merchant', () => {
           merchant_advice:
             'Merchant publishes a UCP profile — use the Universal Commerce Protocol for catalog, cart, and checkout. Checkout includes an AI-agent steering block. Create a card spend request and complete the Link Pay Token flow (enable "I am an AI agent" and inject the token from spend-request retrieve --include link_pay_token).',
           general_advice:
-            'Create a Link spend request with the default card credential type, get it approved, then enter the returned card details into the site checkout form.',
+            'Prefer the Stripe SPT flow when it supports the intended purchase. For a browser checkout fallback, verify the payment controls before creating a card spend request.',
         },
       },
     });

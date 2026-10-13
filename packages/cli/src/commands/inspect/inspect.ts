@@ -1,6 +1,13 @@
 import { Challenge } from 'mppx';
 import { sanitizeDeep } from '../../utils/sanitize-text';
 import { decodeStripeChallenge } from '../mpp/decode';
+import {
+  discoverDocuments,
+  documentedMcpServers,
+  documentedPaymentFlows,
+  type DiscoveryDocument,
+  type DocumentedPaymentFlow,
+} from './documentation';
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const MAX_MPP_PROBES = 12;
@@ -23,6 +30,8 @@ export interface InspectTool {
   /** Payment rail; Stripe MPP uses shared payment tokens. */
   rail?: 'stripe_spt' | 'tempo';
   credential_type?: 'shared_payment_token';
+  evidence?: 'openapi' | 'live_challenge';
+  source_url?: string;
 }
 
 export interface BrowserCheckoutTool {
@@ -32,6 +41,8 @@ export interface BrowserCheckoutTool {
 
 export interface AvailableTools {
   machine_payments?: InspectTool[];
+  /** Documented flows, potentially requiring setup; never executable commands. */
+  payment_flows?: DocumentedPaymentFlow[];
   mcp?: InspectTool[];
   /** Reserved. Inspect does not populate this yet. */
   provisioning?: InspectTool[];
@@ -63,6 +74,7 @@ export interface MppOffer {
 
 export interface MppOperation {
   path: string;
+  url?: string;
   method: string;
   operation_id?: string;
   summary?: string;
@@ -73,6 +85,7 @@ export interface MppOperation {
 }
 
 export interface MppOpenapiProbe extends EndpointProbe {
+  document?: DiscoveryDocument;
   api_title?: string;
   api_description?: string;
   api_guidance?: string;
@@ -127,6 +140,7 @@ interface LinkPayTokenProbe {
 
 interface PageProbe {
   url: string;
+  linkHeader?: string;
   status?: number;
   isHtml: boolean;
   html?: string;
@@ -135,6 +149,7 @@ interface PageProbe {
 
 interface LlmsTxtFile {
   url: string;
+  linkHeader?: string;
   body: string;
 }
 
@@ -277,6 +292,10 @@ export function extractMarkdownMcpLinks(
         /\bmcp\b/i.test(name) &&
         /\b(?:server|endpoint)\b/i.test(name) &&
         !/\b(?:docs?|documentation|guides?|tutorials?)\b/i.test(name);
+      if (/github\.com|gitlab\.com|npmjs\.com/i.test(parsed.hostname)) continue;
+      if (
+        /\b(?:docs?|documentation|guides?|tutorials?|setup)\b|tool list/i.test(name)
+      ) continue;
       if (documentationPath && !explicitEndpoint) continue;
       const absolute = parsed.toString();
       if (seen.has(absolute)) continue;
@@ -525,7 +544,44 @@ function extractRequestBodySchema(operation: Record<string, unknown>): unknown {
 // when "stripe" is among them -- most MPP integrations only offer crypto
 // rails like "tempo". Protocol-only declarations require live discovery.
 // Explicitly non-MPP operations must not become MPP probe candidates.
-function extractOperations(spec: unknown): MppOperation[] {
+function operationUrl(
+  spec: Record<string, unknown>,
+  pathItem: Record<string, unknown>,
+  operation: Record<string, unknown>,
+  path: string,
+  specUrl: string,
+): string | undefined {
+  const servers = operation.servers ?? pathItem.servers ?? spec.servers;
+  const server = Array.isArray(servers) ? servers[0] : undefined;
+  let base = new URL(specUrl).origin;
+  if (server && typeof server.url === 'string') {
+    let template = server.url;
+    template = template.replace(/\{([^}]+)\}/g, (_: string, name: string) => {
+      const value = server.variables?.[name]?.default;
+      return typeof value === 'string' ? value : `{${name}}`;
+    });
+    if (/[{}]/.test(template)) return undefined;
+    try {
+      base = new URL(template, specUrl).toString();
+    } catch {
+      return undefined;
+    }
+  }
+  try {
+    // OpenAPI paths append to the server base path; a leading slash must not
+    // discard /api/v3. With no servers, the inspected origin is the base.
+    const url = new URL(`${base.replace(/\/$/, '')}/${path.replace(/^\//, '')}`);
+    if (
+      !['http:', 'https:'].includes(url.protocol) ||
+      url.username || url.password
+    ) return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function extractOperations(spec: unknown, specUrl: string): MppOperation[] {
   if (!spec || typeof spec !== 'object') return [];
   const paths = (spec as Record<string, unknown>).paths;
   if (!paths || typeof paths !== 'object') return [];
@@ -552,8 +608,15 @@ function extractOperations(spec: unknown): MppOperation[] {
         : [];
       if (protocols.length > 0 && !protocols.includes('mpp')) continue;
 
+      const url = operationUrl(
+        spec as Record<string, unknown>,
+        pathItem as Record<string, unknown>,
+        op, path, specUrl,
+      );
+      if (!url) continue;
       operations.push({
         path,
+        url,
         method: method.toUpperCase(),
         operation_id:
           typeof op.operationId === 'string' ? op.operationId : undefined,
@@ -599,7 +662,7 @@ async function probeMppOpenapiEndpoint(
         error: 'response was not valid JSON',
       };
     }
-    const operations = extractOperations(spec);
+    const operations = extractOperations(spec, url);
     return {
       url,
       found: true,
@@ -608,6 +671,10 @@ async function probeMppOpenapiEndpoint(
       api_description: extractApiText(spec, 'description'),
       api_guidance: extractApiText(spec, 'guidance'),
       operations,
+      document: {
+        url, body: text,
+        linkHeader: response.headers.get('link') ?? undefined,
+      },
     };
   } catch (err) {
     return { url, found: false, error: errorMessage(err) };
@@ -660,6 +727,7 @@ async function probePage(
     const isHtml = contentType.includes('text/html') || /^\s*</.test(body);
     return {
       url,
+      linkHeader: response.headers.get('link') ?? undefined,
       status: response.status,
       isHtml: response.ok && isHtml,
       html: response.ok && isHtml ? body : undefined,
@@ -715,7 +783,7 @@ async function fetchLlmsTxt(
     const body = await response.text();
     const contentType = response.headers.get('content-type') ?? '';
     if (!looksLikeLlmsTxt(body, contentType)) return undefined;
-    return { url, body };
+    return { url, body, linkHeader: response.headers.get('link') ?? undefined };
   } catch {
     return undefined;
   }
@@ -808,6 +876,8 @@ function machinePaymentTool(
   httpMethod: string | undefined,
   rail: 'stripe' | 'tempo',
   description: string,
+  evidence: 'openapi' | 'live_challenge',
+  sourceUrl: string,
 ): InspectTool {
   return {
     command:
@@ -817,6 +887,8 @@ function machinePaymentTool(
     description:
       rail === 'stripe' ? `${description} ${STRIPE_SPT_GUIDANCE}` : description,
     url,
+    evidence,
+    source_url: sourceUrl,
     method: rail,
     rail: rail === 'stripe' ? 'stripe_spt' : 'tempo',
     ...(rail === 'stripe'
@@ -827,33 +899,37 @@ function machinePaymentTool(
 
 function buildMachinePaymentTools(
   origin: string,
-  mppMatch: MppOpenapiProbe | undefined,
+  specs: MppOpenapiProbe[],
   liveChallenges: LiveChallengeProbe[],
 ): InspectTool[] {
   const tools: InspectTool[] = [];
-  const operations = mppMatch?.operations ?? [];
-
-  for (const operation of operations) {
-    const endpoint = new URL(operation.path, origin).toString();
-    const rails = new Set(
-      operation.offers.map((offer) => offer.method.toLowerCase()),
-    );
-    const summary =
-      operation.description ??
-      operation.summary ??
-      mppMatch?.api_description ??
-      mppMatch?.api_guidance ??
-      'Pay with the machine payments protocol';
-
-    if (rails.has('stripe') || rails.has('stripe_spt')) {
-      tools.push(
-        machinePaymentTool(endpoint, operation.method, 'stripe', summary),
+  for (const mppMatch of specs) {
+    for (const operation of mppMatch.operations ?? []) {
+      const endpoint = operation.url ?? new URL(operation.path, origin).toString();
+      const rails = new Set(
+        operation.offers.map((offer) => offer.method.toLowerCase()),
       );
-    }
-    if (rails.has('tempo')) {
-      tools.push(
-        machinePaymentTool(endpoint, operation.method, 'tempo', summary),
-      );
+      const summary =
+        operation.description ??
+        operation.summary ??
+        mppMatch?.api_description ??
+        mppMatch?.api_guidance ??
+        'Pay with the machine payments protocol';
+
+      if (rails.has('stripe') || rails.has('stripe_spt')) {
+        tools.push(
+          machinePaymentTool(
+            endpoint, operation.method, 'stripe', summary, 'openapi', mppMatch.url,
+          ),
+        );
+      }
+      if (rails.has('tempo')) {
+        tools.push(
+          machinePaymentTool(
+            endpoint, operation.method, 'tempo', summary, 'openapi', mppMatch.url,
+          ),
+        );
+      }
     }
   }
 
@@ -868,6 +944,8 @@ function buildMachinePaymentTools(
           offer.method,
           offer.description ??
             'Pay with the machine payments protocol to complete this 402 challenge',
+          'live_challenge',
+          probe.url,
         ),
       );
     }
@@ -879,7 +957,7 @@ function buildMachinePaymentTools(
 function buildMcpTools(
   ucp: UcpProbe,
   wellKnown: DiscoveredMcpServer[],
-  llmsTxt: LlmsTxtFile[],
+  documents: DiscoveryDocument[],
 ): InspectTool[] {
   const tools: InspectTool[] = [];
 
@@ -904,7 +982,7 @@ function buildMcpTools(
     });
   }
 
-  for (const file of llmsTxt) {
+  for (const file of documents) {
     for (const link of extractMarkdownMcpLinks(file.body)) {
       tools.push({
         command: quoteCommandArg(link.url),
@@ -921,6 +999,7 @@ function buildBrowserCheckout(
   page: PageProbe,
   ucp: UcpProbe,
   linkPayToken: LinkPayTokenProbe,
+  hasStripeSpt: boolean,
 ): BrowserCheckoutTool | undefined {
   if (!page.isHtml) return undefined;
 
@@ -938,8 +1017,9 @@ function buildBrowserCheckout(
 
   return {
     merchant_advice: merchantAdvice.join(' ') || undefined,
-    general_advice:
-      'Create a Link spend request with the default card credential type, get it approved, then enter the returned card details into the site checkout form.',
+    general_advice: hasStripeSpt
+      ? 'Prefer the Stripe SPT flow when it supports the intended purchase. For a browser checkout fallback, verify the payment controls before creating a card spend request.'
+      : 'Create a Link spend request with the default card credential type, get it approved, then enter the returned card details into the site checkout form.',
   };
 }
 
@@ -1052,7 +1132,7 @@ async function probeLiveChallenge(
   requestMethod = 'GET',
 ): Promise<LiveChallengeProbe> {
   const url = operation
-    ? new URL(operation.path, origin).toString()
+    ? (operation.url ?? new URL(operation.path, origin).toString())
     : targetUrl;
   const method = operation?.method ?? 'GET';
   const body =
@@ -1168,7 +1248,7 @@ async function probeMppChallenges(
     // Explicit offers are sufficient. Parameterized paths need real purchase
     // inputs and cannot be probed from an origin alone.
     if (operation.offers.length > 0 || /[{}]/.test(operation.path)) continue;
-    const endpoint = new URL(operation.path, origin).toString();
+    const endpoint = operation.url ?? new URL(operation.path, origin).toString();
     const existing = candidates.get(endpoint);
     if (!existing || (existing.method === 'GET' && operation.method !== 'GET')) {
       candidates.set(endpoint, operation);
@@ -1196,21 +1276,26 @@ function toInspectResult(input: {
   page: PageProbe;
   ucp: UcpProbe;
   mppMatch: MppOpenapiProbe | undefined;
+  specs: MppOpenapiProbe[];
+  paymentFlows: DocumentedPaymentFlow[];
   liveChallenges: LiveChallengeProbe[];
   linkPayToken: LinkPayTokenProbe;
   llmsTxt: LlmsTxtFile[];
+  documents: DiscoveryDocument[];
   mcpServers: DiscoveredMcpServer[];
 }): InspectResult {
   const machinePayments = buildMachinePaymentTools(
     input.origin,
-    input.mppMatch,
+    input.specs,
     input.liveChallenges,
   );
-  const mcp = buildMcpTools(input.ucp, input.mcpServers, input.llmsTxt);
+  const mcp = buildMcpTools(input.ucp, input.mcpServers, input.documents);
   const browserCheckout = buildBrowserCheckout(
     input.page,
     input.ucp,
     input.linkPayToken,
+    machinePayments.some((tool) => tool.rail === 'stripe_spt') ||
+      input.paymentFlows.some((flow) => flow.rail === 'stripe_spt'),
   );
 
   const result: InspectResult = {
@@ -1220,6 +1305,7 @@ function toInspectResult(input: {
     llms_txt: input.llmsTxt.map((file) => file.url),
     available_tools: {
       machine_payments: machinePayments,
+      payment_flows: input.paymentFlows,
       mcp,
       browser_checkout: browserCheckout,
     },
@@ -1258,14 +1344,51 @@ export async function runInspect(
     timeoutMs,
   );
 
-  const mppMatch = mppOpenapi.find((p) => p.found);
-  const liveChallenges = await probeMppChallenges(
-    fetchImpl,
+  const documents = await discoverDocuments(
+    [
+      { url: page.url, body: page.html ?? '', linkHeader: page.linkHeader },
+      ...llmsTxt,
+      ...mppOpenapi.flatMap((probe) =>
+        probe.document ? [probe.document] : [],
+      ),
+    ],
     origin,
-    url,
-    mppMatch,
+    fetchImpl,
     timeoutMs,
   );
+  const specs = mppOpenapi.filter((probe) => probe.found);
+  for (const document of documents) {
+    if (specs.some((spec) => spec.url === document.url)) continue;
+    try {
+      const spec = JSON.parse(document.body);
+      if (
+        !spec || typeof spec !== 'object' ||
+        !spec.paths || typeof spec.paths !== 'object'
+      ) continue;
+      specs.push({
+        url: document.url, found: true,
+        api_title: extractApiText(spec, 'title'),
+        api_description: extractApiText(spec, 'description'),
+        api_guidance: extractApiText(spec, 'guidance'),
+        operations: extractOperations(spec, document.url),
+      });
+    } catch {
+      // Most linked documentation is Markdown or HTML, not OpenAPI.
+    }
+  }
+  const mppMatch = specs.find((spec) => spec.operations?.length) ?? specs[0];
+  // Bound live discovery across all advertised specs, not separately per spec.
+  const liveSpec = specs.length
+    ? {
+        ...specs[0],
+        operations: specs.flatMap((spec) => spec.operations ?? []),
+      }
+    : undefined;
+  const liveChallenges = await probeMppChallenges(
+    fetchImpl, origin, url, liveSpec, timeoutMs,
+  );
+  const paymentFlows = documentedPaymentFlows(documents);
+  const documentedMcp = documentedMcpServers(documents, origin);
 
   const linkPayToken = detectLinkPayToken(page);
 
@@ -1274,9 +1397,12 @@ export async function runInspect(
     page,
     ucp,
     mppMatch,
+    specs,
+    paymentFlows,
     liveChallenges,
     linkPayToken,
     llmsTxt,
-    mcpServers: wellKnownMcp,
+    documents,
+    mcpServers: [...wellKnownMcp, ...documentedMcp],
   });
 }
