@@ -1,8 +1,8 @@
 import { expect, it, vi } from 'vitest';
-import type { LinkCli } from './link.ts';
-import { runValidation } from './run.ts';
-import { createSptAdapter } from './spt.ts';
-import { validations } from './validations/index.ts';
+import type { LinkCli } from '../src/link.ts';
+import { runValidation } from '../src/run.ts';
+import { createSptAdapter } from '../src/spt.ts';
+import { validations } from '../src/validations/index.ts';
 
 type Task = { validation: string; url: string };
 type Event = { event?: string; tasks?: Task[]; [key: string]: unknown };

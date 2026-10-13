@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { readStripeTestKey } from './stripe-config.ts';
+import { readStripeTestKey } from '../src/stripe-config.ts';
 
 let directory: string;
 let configPath: string;

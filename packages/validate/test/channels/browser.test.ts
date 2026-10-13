@@ -1,9 +1,9 @@
 import { request as httpRequest, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, expect, it, vi } from 'vitest';
-import { createValidationServer } from '../seller.ts';
-import { createSptAdapter } from '../spt.ts';
-import { validations } from '../validations/index.ts';
+import { createValidationServer } from '../../src/seller.ts';
+import { createSptAdapter } from '../../src/spt.ts';
+import { validations } from '../../src/validations/index.ts';
 
 const [cardBrowserPurchase] = validations.filter(
   (v) => v.id === 'card-browser-purchase',

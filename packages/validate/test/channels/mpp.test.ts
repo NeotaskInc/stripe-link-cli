@@ -2,9 +2,9 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Challenge, Credential } from 'mppx';
 import { afterEach, expect, it, vi } from 'vitest';
-import { createValidationServer } from '../seller.ts';
-import { createSptAdapter } from '../spt.ts';
-import { validations } from '../validations/index.ts';
+import { createValidationServer } from '../../src/seller.ts';
+import { createSptAdapter } from '../../src/spt.ts';
+import { validations } from '../../src/validations/index.ts';
 
 const [sptMppPurchase] = validations.filter((v) => v.id === 'spt-mpp-purchase');
 
