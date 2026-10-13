@@ -54,6 +54,10 @@ it('serves a checkout form and rejects a malformed card', async () => {
   const page = await fetch(`${run.url}/`).then((r) => r.text());
   expect(page).toContain('action="/card-browser-purchase/purchase"');
   expect(page).toContain('cc-number');
+  expect(page).toContain('$1.00 USD');
+  expect(page).toContain('Use test-mode card credentials only');
+  expect(page).toContain('--test');
+  expect(page).toContain('No charge will be made.');
 
   const response = await postForm(`${run.url}/purchase`, {
     ...validForm,

@@ -1,5 +1,5 @@
 import { checkoutPage, purchase } from '../checkout.ts';
-import type { ChannelContext } from '../seller.ts';
+import { type ChannelContext, productLine } from '../seller.ts';
 
 // Expose the card checkout form as a declarative WebMCP tool. Chrome derives
 // its input schema from the form fields and fills them before submitting.
@@ -16,7 +16,7 @@ export async function webmcp(context: ChannelContext) {
         `<script>
 const form = document.querySelector('form');
 form.setAttribute('toolname', 'purchase');
-form.setAttribute('tooldescription', 'Place an order using card details and a shipping address.');
+form.setAttribute('tooldescription', ${JSON.stringify(`${productLine(context)} Place a test order using test-mode card credentials (Link CLI: --test) and a shipping address. No charge will be made.`)});
 form.setAttribute('toolautosubmit', '');
 form.addEventListener('submit', (event) => {
   event.preventDefault();

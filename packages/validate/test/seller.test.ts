@@ -51,6 +51,9 @@ it('confirms a verified payment', async () => {
     await fetch(`${run.purchase}/api`).then((r) => r.json()),
   ).toMatchObject({
     product: { amount: 100, ships: true },
+    currency: 'usd',
+    amount_unit: 'cents',
+    test_mode: true,
     network_id: 'profile_test_seller',
   });
   const receipt = await post(`${run.purchase}/purchase`, {
@@ -60,6 +63,7 @@ it('confirms a verified payment', async () => {
 
   const [, init] = run.stripe.mock.calls[0];
   expect(init?.headers).toMatchObject({
+    Authorization: 'Bearer sk_test_seller',
     'Idempotency-Key': `link_validate_${run.runId}_spt-api-purchase`,
   });
   expect(Object.fromEntries(init?.body as URLSearchParams)).toMatchObject({
@@ -105,13 +109,35 @@ it('requires shipping where the product ships and refuses out-of-stock products'
     409,
   );
   expect(run.observe('spt-api-cancel').purchase_attempted).toBe(true);
-  expect(
-    await fetch(`${run.url}/spt-api-cancel/api`).then((r) => r.json()),
-  ).not.toHaveProperty('confirmation');
+  const docs = await fetch(`${run.url}/spt-api-cancel/api`).then((r) =>
+    r.json(),
+  );
+  expect(docs).toMatchObject({
+    product: { amount: 200 },
+    currency: 'usd',
+    amount_unit: 'cents',
+    test_mode: true,
+  });
+  expect(docs).not.toHaveProperty('confirmation');
   expect(run.stripe).not.toHaveBeenCalled();
 });
 
 it('requires a sandbox key that can accept SPTs', () => {
   expect(() => createSptAdapter('sk_live_seller')).toThrow('sandbox key');
+  expect(() => createSptAdapter('rk_live_seller')).toThrow('sandbox key');
   expect(() => createSptAdapter('rkcs_test_claimable')).toThrow('sandbox key');
 });
+
+it.each([{ livemode: true }, { amount: 10000 }, { currency: 'eur' }])(
+  'rejects a succeeded payment with mismatched evidence: %j',
+  async (mismatch) => {
+    const run = await start({ ...paid, ...mismatch });
+    const response = await post(`${run.purchase}/purchase`, {
+      spt: 'spt_test_buyer',
+      shipping_address,
+    });
+    expect(response.status).toBe(422);
+    expect(run.observe('spt-api-purchase').payment).toBeUndefined();
+    expect(run.observe('spt-api-purchase').terminal_error).toBeDefined();
+  },
+);

@@ -50,7 +50,7 @@ export async function runValidation(options: {
         validation: validation.id,
         channel: validation.channel,
         url,
-        task: validation.task(url),
+        task: `${validation.task(url)} Use test-mode payment credentials only (Link CLI: --test).`,
       };
     });
     write({

@@ -62,6 +62,9 @@ it('requires the WebMCP checkout form submission', async () => {
   const run = await start();
   const html = await fetch(run.url).then((r) => r.text());
   expect(html).toContain("form.setAttribute('toolname', 'purchase')");
+  expect(html).toContain(
+    `form.setAttribute('tooldescription', "Trail water bottle, $1.00 USD, shipped. Place a test order using test-mode card credentials (Link CLI: --test) and a shipping address. No charge will be made.")`,
+  );
   expect(run.observe('card-webmcp-purchase').api_viewed).toBe(true);
 
   const response = await post(run.url, validForm);

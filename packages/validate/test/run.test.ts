@@ -4,7 +4,7 @@ import { runValidation } from '../src/run.ts';
 import { createSptAdapter } from '../src/spt.ts';
 import { validations } from '../src/validations/index.ts';
 
-type Task = { validation: string; url: string };
+type Task = { validation: string; url: string; task: string };
 type Event = { event?: string; tasks?: Task[]; [key: string]: unknown };
 type Result = { id: string; status: string; [key: string]: unknown };
 
@@ -82,6 +82,10 @@ it('reports incremental scores when tasks finish out of order', async () => {
   const request = { ...fieldGuide };
   const validation = run(0, link([request]));
   const ready = await validation.readyEvent;
+  for (const task of ready.tasks ?? []) {
+    expect(task.task).toContain('Use test-mode payment credentials only');
+    expect(task.task).toContain('--test');
+  }
   const cancelUrl = ready.tasks?.find(
     (task) => task.validation === cancel.id,
   )?.url;

@@ -18,6 +18,7 @@ export function checkoutPage(context: ChannelContext, script = '') {
   return (
     `<!doctype html><html lang="en"><meta charset="utf-8"><title>Trail Notes checkout</title>` +
     `<h1>Trail Notes</h1><p>${productLine(context)}</p>` +
+    `<p>Test checkout. Use test-mode card credentials only (Link CLI: --test). No charge will be made.</p>` +
     `<form method="post" action="${context.base}/purchase">` +
     field('card_number', 'Card number', 'cc-number') +
     field('expiry', 'Expiry (MM/YY)', 'cc-exp') +

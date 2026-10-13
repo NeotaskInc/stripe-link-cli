@@ -18,6 +18,7 @@ export function createSptAdapter(
   return {
     documentation: {
       currency,
+      amount_unit: 'cents',
       test_mode: true,
       network_id: sptNetworkId,
       credential: {

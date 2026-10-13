@@ -29,10 +29,14 @@ async function start(stripeResponse: unknown) {
 async function pay(url: string) {
   const probe = await fetch(url);
   expect(probe.status).toBe(402);
+  expect(await probe.json()).toMatchObject({ test_mode: true });
   const [challenge] = Challenge.deserializeList(
     probe.headers.get('www-authenticate') ?? '',
   );
   expect(challenge.request).toMatchObject({
+    amount: '100',
+    currency: 'usd',
+    description: expect.stringContaining('--test'),
     methodDetails: { networkId: 'profile_test_seller' },
   });
   return fetch(url, {
@@ -63,6 +67,13 @@ it('charges a paid credential after a 402 challenge', async () => {
   const response = await pay(run.url);
   expect(response.status).toBe(200);
   expect(response.headers.get('payment-receipt')).toBeTruthy();
+  const [, options] = run.stripe.mock.calls[0];
+  expect(options?.headers).toMatchObject({
+    Authorization: 'Bearer sk_test_seller',
+  });
+  expect(new URLSearchParams(options?.body as string).get('amount')).toBe(
+    '100',
+  );
   expect(run.observe('spt-mpp-purchase')).toMatchObject({
     api_viewed: true,
     payment: { payment_intent: 'pi_mpp' },

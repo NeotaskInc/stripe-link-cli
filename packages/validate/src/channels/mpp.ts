@@ -48,9 +48,12 @@ function chargeHandler({ run, runId, adapter }: ChannelContext) {
         client,
         networkId: sptNetworkId,
         paymentMethodTypes: ['card'],
-        amount: String(product.amount),
+        // mppx takes major units and encodes minor units in the challenge.
+        amount: (product.amount / 100).toFixed(2),
         currency: 'usd',
         decimals: 2,
+        description:
+          'Test-mode payment only. Create a test payment credential (Link CLI: --test).',
       }),
     ],
     secretKey: randomBytes(32).toString('hex'),
@@ -90,7 +93,10 @@ export async function mpp(context: ChannelContext) {
         'WWW-Authenticate',
         result.challenge.headers.get('WWW-Authenticate') ?? '',
       );
-      reply(402, { error: `${validation.product.name} requires payment.` });
+      reply(402, {
+        error: `${validation.product.name} requires a test-mode payment.`,
+        test_mode: true,
+      });
       return;
     }
     if (result.status === 402) {
