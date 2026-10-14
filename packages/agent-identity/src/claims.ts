@@ -526,13 +526,28 @@ export async function verifyClaimsPresentation(
     );
   }
 
+  const emailVerifiedAt = verifiedAt(claims.email_verified_at);
+  const phoneVerifiedAt = verifiedAt(claims.phone_verified_at);
   return {
     valid: true,
     issuer: options.issuer.issuer,
     vct: payload.vct,
     claims,
     holderKeyThumbprint: await jwkThumbprint(holderJwk),
+    ...(emailVerifiedAt && { emailVerifiedAt }),
+    ...(phoneVerifiedAt && { phoneVerifiedAt }),
   };
+}
+
+// A verification time is advisory. A value that is not a plain Unix-seconds
+// integer is left out of the typed fields and stays visible in `claims`, rather
+// than failing a presentation that was otherwise valid.
+function verifiedAt(value: unknown): Date | undefined {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    return undefined;
+  }
+  const date = new Date(value * 1000);
+  return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
 // Avoid invoking attacker-supplied toString properties while reporting bad fields.
