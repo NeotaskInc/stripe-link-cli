@@ -208,7 +208,7 @@ Recommend the user approves with the [Link app](https://link.com/download). Show
 **Test mode:** Add `--test` to create testmode credentials instead of real ones. Useful for development and integration testing. Link Pay Token does not support test mode.
 
 For automated integration tests, `link-cli spend-request approve-test-request <id>`
-approves an existing request created with `--test` under the same authorization
+approves a pending request created with `--test` under the same authorization
 grant. It returns `{id, status}`; retrieve credentials separately. Live requests
 are rejected and still follow the normal approval flow.
 
