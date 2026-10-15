@@ -793,3 +793,11 @@ CI runs the same publish dry-run for every pull request.
 The Go SDK is a nested module and is released with a repository tag such as
 `packages/sdk-go/v0.1.0`. Go module tags are independent of npm package
 versions.
+
+The Python SDK is published to PyPI as `stripe-link-sdk` using GitHub OIDC Trusted
+Publishing, with attestations for its wheel and source distribution. Its
+versions are independent of npm and Go: update `project.version` in
+`packages/sdk-python/pyproject.toml`, refresh `uv.lock`, and add Python changelog
+notes in a PR. Merging to `main` publishes an unpublished version automatically
+after the Python checks pass. See the [Python release guide](packages/sdk-python/README.md#releasing)
+for one-time PyPI setup, verification, and recovery.
